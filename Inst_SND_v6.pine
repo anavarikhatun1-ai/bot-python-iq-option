@@ -61,17 +61,17 @@ float h_atr_val    = ta.atr(atr_len)
 bool h_trend_long  = h_ema20_val > h_ema50_val and close > h_ema200_val and close > h_ema20_val and close > h_ema50_val
 bool h_trend_short = h_ema20_val < h_ema50_val and close < h_ema200_val and close < h_ema20_val and close < h_ema50_val
 
-// S&D Zone Formation checks on HTF
-bool h_is_demand_formed = (close > open) and (close - open) > (h_atr_val * expansion_mult) and h_trend_long and (high[1] < close)
-bool h_is_supply_formed = (close < open) and (open - close) > (h_atr_val * expansion_mult) and h_trend_short and (low[1] > close)
-float h_z_top           = high[1]
-float h_z_bottom        = low[1]
+// S&D Zone Formation checks on HTF (using float representation to avoid series bool na() compilation error in v6)
+float h_is_demand_formed_float = (close > open) and (close - open) > (h_atr_val * expansion_mult) and h_trend_long and (high[1] < close) ? 1.0 : 0.0
+float h_is_supply_formed_float = (close < open) and (open - close) > (h_atr_val * expansion_mult) and h_trend_short and (low[1] > close) ? 1.0 : 0.0
+float h_z_top                  = high[1]
+float h_z_bottom               = low[1]
 
 // Request MTF data as tuple
 [h_dem, h_sup, h_top, h_bot, h_ema20, h_ema50, h_ema200, h_close] = request.security(
      syminfo.tickerid,
      htf_timeframe,
-     [h_is_demand_formed, h_is_supply_formed, h_z_top, h_z_bottom, h_ema20_val, h_ema50_val, h_ema200_val, close],
+     [h_is_demand_formed_float, h_is_supply_formed_float, h_z_top, h_z_bottom, h_ema20_val, h_ema50_val, h_ema200_val, close],
      gaps = barmerge.gaps_on,
      lookahead = barmerge.lookahead_off
  )
@@ -146,8 +146,8 @@ if is_ltf_supply_formed
     clean_oldest_zone(supply_zones)
 
 // Form 15m zones when requested HTF signals are detected
-bool h_dem_formed_here = not na(h_dem) and h_dem
-bool h_sup_formed_here = not na(h_sup) and h_sup
+bool h_dem_formed_here = not na(h_dem) and h_dem == 1.0
+bool h_sup_formed_here = not na(h_sup) and h_sup == 1.0
 
 if h_dem_formed_here
     float z_top = h_top
