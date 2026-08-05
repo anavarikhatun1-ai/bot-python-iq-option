@@ -223,7 +223,7 @@ if sell_signal
         box.set_border_color(active_supply.visual_box, color.gray)
         box.set_border_style(active_supply.visual_box, line.style_dotted)
 
-        // Webhook JSON Alert Payload for SELL (Corrected bug where it was hardcoded to "BUY")
+        // Webhook JSON Alert Payload for SELL
         string alert_json = '{"ticker": "' + syminfo.ticker + '", "action": "SELL", "price": ' + str.tostring(entry_price) + ', "stop_loss": ' + str.tostring(stop_loss) + ', "take_profit": ' + str.tostring(take_profit) + '}'
         alert(alert_json, alert.freq_once_per_bar)
 
@@ -252,28 +252,31 @@ else if strategy.position_size < 0
 // ==========================================
 // PHASE 6: REAL-TIME EXIT ALERTS & BACKTEST SYNC
 // ==========================================
-// Track position state changes to trigger Exit Alerts
+// Track position state changes to trigger Exit Alerts safely without index errors
 bool long_active_prev  = strategy.position_size[1] > 0
 bool short_active_prev = strategy.position_size[1] < 0
 bool long_closed       = long_active_prev and strategy.position_size <= 0
 bool short_closed      = short_active_prev and strategy.position_size >= 0
 
+int total_closed = strategy.closedtrades
+
 if long_closed
-    float exit_p = strategy.closedtrades > 0 ? strategy.closedtrades.exit_price(strategy.closedtrades - 1) : close
-    float profit_val = strategy.closedtrades > 0 ? strategy.closedtrades.profit(strategy.closedtrades - 1) : 0.0
+    // Guard against strategy.closedtrades being 0 on first historical bars or live initialization
+    float exit_p = total_closed > 0 ? strategy.closedtrades.exit_price(total_closed - 1) : close
+    float profit_val = total_closed > 0 ? strategy.closedtrades.profit(total_closed - 1) : 0.0
     string reason = "EXIT"
-    if strategy.closedtrades > 0
-        reason := strategy.closedtrades.profit(strategy.closedtrades - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
+    if total_closed > 0
+        reason := strategy.closedtrades.profit(total_closed - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
 
     string alert_exit_json = '{"ticker": "' + syminfo.ticker + '", "action": "EXIT_LONG", "price": ' + str.tostring(exit_p) + ', "profit": ' + str.tostring(profit_val) + ', "reason": "' + reason + '"}'
     alert(alert_exit_json, alert.freq_once_per_bar)
 
 if short_closed
-    float exit_p = strategy.closedtrades > 0 ? strategy.closedtrades.exit_price(strategy.closedtrades - 1) : close
-    float profit_val = strategy.closedtrades > 0 ? strategy.closedtrades.profit(strategy.closedtrades - 1) : 0.0
+    float exit_p = total_closed > 0 ? strategy.closedtrades.exit_price(total_closed - 1) : close
+    float profit_val = total_closed > 0 ? strategy.closedtrades.profit(total_closed - 1) : 0.0
     string reason = "EXIT"
-    if strategy.closedtrades > 0
-        reason := strategy.closedtrades.profit(strategy.closedtrades - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
+    if total_closed > 0
+        reason := strategy.closedtrades.profit(total_closed - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
 
     string alert_exit_json = '{"ticker": "' + syminfo.ticker + '", "action": "EXIT_SHORT", "price": ' + str.tostring(exit_p) + ', "profit": ' + str.tostring(profit_val) + ', "reason": "' + reason + '"}'
     alert(alert_exit_json, alert.freq_once_per_bar)
