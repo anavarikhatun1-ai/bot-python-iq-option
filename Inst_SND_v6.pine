@@ -1,0 +1,282 @@
+//@version=6
+strategy("Institutional HTF/LTF Supply & Demand Scalping Strategy", shorttitle="Inst_SND_v6", overlay=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=1.0, slippage=1, commission_type=strategy.commission.percent, commission_value=0.03)
+
+// ==========================================
+// PHASE 1: PARAMETER ABSTRACTION & INPUTS
+// ==========================================
+// Trend Filters
+bool use_trend_filter = input.bool(true, title="Enable Trend Filters", group="Trend Filter Settings", tooltip="Filter entries based on EMA alignment")
+int ema_fast_len     = input.int(20, title="EMA Fast Length", minval=1, group="Trend Filter Settings")
+int ema_med_len      = input.int(50, title="EMA Medium Length", minval=1, group="Trend Filter Settings")
+int ema_slow_len     = input.int(200, title="EMA Slow Length", minval=1, group="Trend Filter Settings")
+
+// Multi-Timeframe (MTF) Settings
+string htf_timeframe = input.timeframe("15", title="HTF (Big Brother) Timeframe", group="MTF Configuration")
+
+// Supply & Demand (S&D) Zone Identification Settings
+float expansion_mult = input.float(1.5, title="Expansion ATR Multiplier", minval=0.5, step=0.1, group="S&D Zone Settings", tooltip="How strong the breakout candle must be relative to average ATR to form a zone")
+int atr_len          = input.int(14, title="ATR Length", minval=1, group="S&D Zone Settings")
+int max_zones        = input.int(5, title="Max Active Zones to Track", minval=1, maxval=10, group="S&D Zone Settings")
+
+// Position Sizing & Risk Management
+float risk_percent    = input.float(1.0, title="Risk Per Trade (%)", minval=0.1, maxval=10.0, step=0.1, group="Risk Configuration")
+float sl_atr_mult     = input.float(0.5, title="Stop Loss ATR Buffer", minval=0.0, maxval=3.0, step=0.1, group="Risk Configuration", tooltip="Extra SL buffer below/above the zone in ATR units")
+float rr_ratio        = input.float(2.0, title="Risk-to-Reward (R:R) Ratio", minval=1.0, maxval=10.0, step=0.1, group="Risk Configuration")
+bool use_trailing_stop= input.bool(true, title="Enable Dynamic Trailing Stop", group="Risk Configuration")
+float trail_atr_mult  = input.float(1.5, title="Trailing Stop ATR Multiplier", minval=0.5, step=0.1, group="Risk Configuration")
+
+// Visual Settings
+color bullish_zone_color = input.color(color.new(color.green, 85), title="Demand Zone Color", group="Visuals")
+color bearish_zone_color = input.color(color.new(color.red, 85), title="Supply Zone Color", group="Visuals")
+color mitigated_zone_color = input.color(color.new(color.gray, 92), title="Mitigated Zone Color", group="Visuals")
+
+// ==========================================
+// PHASE 2: INDICATOR CALCULATIONS
+// ==========================================
+// 1. Local (LTF - 5m) indicators
+float ltf_ema20  = ta.ema(close, ema_fast_len)
+float ltf_ema50  = ta.ema(close, ema_med_len)
+float ltf_ema200 = ta.ema(close, ema_slow_len)
+float ltf_atr    = ta.atr(atr_len)
+
+// 2. Non-Repainting Higher Timeframe (HTF - 15m) indicators
+// We request the indicator value of the previous completed bar to avoid lookahead/repainting bias.
+float htf_ema20  = request.security(syminfo.tickerid, htf_timeframe, ta.ema(close, ema_fast_len)[1], barmerge.gaps_off, barmerge.lookahead_off)
+float htf_ema50  = request.security(syminfo.tickerid, htf_timeframe, ta.ema(close, ema_med_len)[1], barmerge.gaps_off, barmerge.lookahead_off)
+float htf_ema200 = request.security(syminfo.tickerid, htf_timeframe, ta.ema(close, ema_slow_len)[1], barmerge.gaps_off, barmerge.lookahead_off)
+float htf_atr    = request.security(syminfo.tickerid, htf_timeframe, ta.atr(atr_len)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+// Trend Direction Logic (EMA alignment)
+bool ltf_bullish_trend = ltf_ema20 > ltf_ema50 and close > ltf_ema200
+bool ltf_bearish_trend = ltf_ema20 < ltf_ema50 and close < ltf_ema200
+
+bool htf_bullish_trend = htf_ema20 > htf_ema50 and close > htf_ema200
+bool htf_bearish_trend = htf_ema20 < htf_ema50 and close < htf_ema200
+
+bool trend_aligned_long  = not use_trend_filter or (ltf_bullish_trend and htf_bullish_trend)
+bool trend_aligned_short = not use_trend_filter or (ltf_bearish_trend and htf_bearish_trend)
+
+// Plot EMAs (Limit calls to preserve chart performance)
+plot(ltf_ema20, title="LTF EMA 20", color=color.blue, linewidth=1)
+plot(ltf_ema50, title="LTF EMA 50", color=color.orange, linewidth=1)
+plot(ltf_ema200, title="LTF EMA 200", color=color.red, linewidth=2)
+
+// ==========================================
+// PHASE 3: SUPPLY & DEMAND ZONE ARCHITECTURE
+// ==========================================
+// Define custom type for S&D Zones
+type Zone
+    float top
+    float bottom
+    int start_bar
+    bool is_demand
+    bool active
+    box visual_box
+
+// Persistent arrays to store the active zones
+var Zone[] demand_zones = array.new<Zone>()
+var Zone[] supply_zones = array.new<Zone>()
+
+// Clean up old boxes if max count exceeded
+clean_oldest_zone(Zone[] zones) =>
+    if array.size(zones) > max_zones
+        Zone oldest = array.shift(zones)
+        if not na(oldest.visual_box)
+            box.delete(oldest.visual_box)
+
+// Detect LTF Zone Formations
+bool is_ltf_demand_formed = (close > open) and (close - open) > (ltf_atr * expansion_mult)
+bool is_ltf_supply_formed = (close < open) and (open - close) > (ltf_atr * expansion_mult)
+
+// If formed, the base candle [1] is the S&D origin
+if is_ltf_demand_formed
+    float z_top = high[1]
+    float z_bottom = low[1]
+    box b = box.new(left=bar_index - 1, top=z_top, right=bar_index + 10, bottom=z_bottom,
+                    bgcolor=bullish_zone_color, border_color=color.green, border_style=line.style_dashed)
+    Zone new_zone = Zone.new(top=z_top, bottom=z_bottom, start_bar=bar_index - 1, is_demand=true, active=true, visual_box=b)
+    array.push(demand_zones, new_zone)
+    clean_oldest_zone(demand_zones)
+
+if is_ltf_supply_formed
+    float z_top = high[1]
+    float z_bottom = low[1]
+    box b = box.new(left=bar_index - 1, top=z_top, right=bar_index + 10, bottom=z_bottom,
+                    bgcolor=bearish_zone_color, border_color=color.red, border_style=line.style_dashed)
+    Zone new_zone = Zone.new(top=z_top, bottom=z_bottom, start_bar=bar_index - 1, is_demand=false, active=true, visual_box=b)
+    array.push(supply_zones, new_zone)
+    clean_oldest_zone(supply_zones)
+
+// Update S&D Zone boxes and mitigation status
+update_and_mitigate_zones(Zone[] zones, bool is_dem) =>
+    if array.size(zones) > 0
+        for i = array.size(zones) - 1 to 0
+            Zone z = array.get(zones, i)
+            if z.active
+                // Extend box rightward to current bar
+                box.set_right(z.visual_box, bar_index)
+
+                // Mitigation checks
+                if is_dem
+                    // If price closes below the bottom of a demand zone, it is violated/mitigated
+                    if close < z.bottom
+                        z.active := false
+                        box.set_bgcolor(z.visual_box, mitigated_zone_color)
+                        box.set_border_color(z.visual_box, color.gray)
+                        box.set_border_style(z.visual_box, line.style_dotted)
+                else
+                    // If price closes above the top of a supply zone, it is violated/mitigated
+                    if close > z.top
+                        z.active := false
+                        box.set_bgcolor(z.visual_box, mitigated_zone_color)
+                        box.set_border_color(z.visual_box, color.gray)
+                        box.set_border_style(z.visual_box, line.style_dotted)
+
+update_and_mitigate_zones(demand_zones, true)
+update_and_mitigate_zones(supply_zones, false)
+
+// ==========================================
+// PHASE 4: ENTRY SIGNAL & EXECUTION LOGIC
+// ==========================================
+// Find if there is an active zone currently being tested.
+// Ensure we look at all active zones and find the one currently triggered on a pullback.
+// Also, guarantee pullback occurs on subsequent bars (bar_index > z.start_bar + 1) to avoid self-testing on the formation bar.
+Zone active_demand = na
+if array.size(demand_zones) > 0
+    for i = array.size(demand_zones) - 1 to 0
+        Zone z = array.get(demand_zones, i)
+        if z.active and bar_index > z.start_bar + 1
+            if (low <= z.top) and (high >= z.bottom)
+                active_demand := z
+                break
+
+Zone active_supply = na
+if array.size(supply_zones) > 0
+    for i = array.size(supply_zones) - 1 to 0
+        Zone z = array.get(supply_zones, i)
+        if z.active and bar_index > z.start_bar + 1
+            if (high >= z.bottom) and (low <= z.top)
+                active_supply := z
+                break
+
+// Trigger Conditions
+bool test_demand_zone = not na(active_demand)
+bool test_supply_zone = not na(active_supply)
+
+// Entry Signals
+bool buy_signal  = trend_aligned_long and test_demand_zone and (strategy.position_size == 0)
+bool sell_signal = trend_aligned_short and test_supply_zone and (strategy.position_size == 0)
+
+// Persistent trade variables for risk calculation
+var float entry_price = 0.0
+var float stop_loss   = 0.0
+var float take_profit = 0.0
+
+if buy_signal
+    entry_price := close
+    // Stop Loss set below the bottom of the demand zone minus ATR buffer
+    stop_loss   := active_demand.bottom - (ltf_atr * sl_atr_mult)
+    float risk  = entry_price - stop_loss
+    // Hard check to prevent division by zero or negative risk
+    if risk <= 0
+        risk := ltf_atr * 1e-10
+    take_profit := entry_price + (risk * rr_ratio)
+
+    // Risk-based position sizing
+    float risk_capital = strategy.equity * (risk_percent / 100.0)
+    float position_units = risk > 0 ? risk_capital / risk : na
+
+    if not na(position_units)
+        // Fire strategy entry
+        strategy.entry("Long", strategy.long, qty=position_units)
+
+        // Deactivate/mitigate the tested zone immediately upon entry to prevent duplicate trades
+        active_demand.active := false
+        box.set_bgcolor(active_demand.visual_box, mitigated_zone_color)
+        box.set_border_color(active_demand.visual_box, color.gray)
+        box.set_border_style(active_demand.visual_box, line.style_dotted)
+
+        // Webhook JSON Alert Payload for BUY
+        string alert_json = '{"ticker": "' + syminfo.ticker + '", "action": "BUY", "price": ' + str.tostring(entry_price) + ', "stop_loss": ' + str.tostring(stop_loss) + ', "take_profit": ' + str.tostring(take_profit) + '}'
+        alert(alert_json, alert.freq_once_per_bar)
+
+if sell_signal
+    entry_price := close
+    // Stop Loss set above the top of the supply zone plus ATR buffer
+    stop_loss   := active_supply.top + (ltf_atr * sl_atr_mult)
+    float risk  = stop_loss - entry_price
+    if risk <= 0
+        risk := ltf_atr * 1e-10
+    take_profit := entry_price - (risk * rr_ratio)
+
+    // Risk-based position sizing
+    float risk_capital = strategy.equity * (risk_percent / 100.0)
+    float position_units = risk > 0 ? risk_capital / risk : na
+
+    if not na(position_units)
+        // Fire strategy entry
+        strategy.entry("Short", strategy.short, qty=position_units)
+
+        // Deactivate/mitigate the tested zone immediately upon entry to prevent duplicate trades
+        active_supply.active := false
+        box.set_bgcolor(active_supply.visual_box, mitigated_zone_color)
+        box.set_border_color(active_supply.visual_box, color.gray)
+        box.set_border_style(active_supply.visual_box, line.style_dotted)
+
+        // Webhook JSON Alert Payload for SELL
+        string alert_json = '{"ticker": "' + syminfo.ticker + '", "action": "SELL", "price": ' + str.tostring(entry_price) + ', "stop_loss": ' + str.tostring(stop_loss) + ', "take_profit": ' + str.tostring(take_profit) + '}'
+        alert(alert_json, alert.freq_once_per_bar)
+
+// ==========================================
+// PHASE 5: RISK MANAGEMENT & EXIT ENGINE
+// ==========================================
+// Dynamic Trailing Stop Logic
+if strategy.position_size != 0 and use_trailing_stop
+    if strategy.position_size > 0
+        // Trailing stop for Long trades: moves up with higher lows
+        float trail_sl = ta.lowest(low, 5) - (ltf_atr * trail_atr_mult)
+        if trail_sl > stop_loss
+            stop_loss := trail_sl
+    else
+        // Trailing stop for Short trades: moves down with lower highs
+        float trail_sl = ta.highest(high, 5) + (ltf_atr * trail_atr_mult)
+        if trail_sl < stop_loss
+            stop_loss := trail_sl
+
+// Apply Bracket Orders for Exit
+if strategy.position_size > 0
+    strategy.exit("Exit Long", "Long", stop=stop_loss, limit=take_profit)
+else if strategy.position_size < 0
+    strategy.exit("Exit Short", "Short", stop=stop_loss, limit=take_profit)
+
+// ==========================================
+// PHASE 6: REAL-TIME EXIT ALERTS & BACKTEST SYNC
+// ==========================================
+// Track position state changes to trigger Exit Alerts safely without index errors
+bool long_active_prev  = strategy.position_size[1] > 0
+bool short_active_prev = strategy.position_size[1] < 0
+bool long_closed       = long_active_prev and strategy.position_size <= 0
+bool short_closed      = short_active_prev and strategy.position_size >= 0
+
+int total_closed = strategy.closedtrades
+
+if long_closed
+    // Guard against strategy.closedtrades being 0 on first historical bars or live initialization
+    float exit_p = total_closed > 0 ? strategy.closedtrades.exit_price(total_closed - 1) : close
+    float profit_val = total_closed > 0 ? strategy.closedtrades.profit(total_closed - 1) : 0.0
+    string reason = "EXIT"
+    if total_closed > 0
+        reason := strategy.closedtrades.profit(total_closed - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
+
+    string alert_exit_json = '{"ticker": "' + syminfo.ticker + '", "action": "EXIT_LONG", "price": ' + str.tostring(exit_p) + ', "profit": ' + str.tostring(profit_val) + ', "reason": "' + reason + '"}'
+    alert(alert_exit_json, alert.freq_once_per_bar)
+
+if short_closed
+    float exit_p = total_closed > 0 ? strategy.closedtrades.exit_price(total_closed - 1) : close
+    float profit_val = total_closed > 0 ? strategy.closedtrades.profit(total_closed - 1) : 0.0
+    string reason = "EXIT"
+    if total_closed > 0
+        reason := strategy.closedtrades.profit(total_closed - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
+
+    string alert_exit_json = '{"ticker": "' + syminfo.ticker + '", "action": "EXIT_SHORT", "price": ' + str.tostring(exit_p) + ', "profit": ' + str.tostring(profit_val) + ', "reason": "' + reason + '"}'
+    alert(alert_exit_json, alert.freq_once_per_bar)
