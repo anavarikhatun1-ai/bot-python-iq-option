@@ -1,0 +1,435 @@
+//@version=6
+strategy("Institutional HTF/LTF Supply & Demand Scalping Strategy", shorttitle="Inst_SND_v6", overlay=true, initial_capital=100000, default_qty_type=strategy.percent_of_equity, default_qty_value=1.0, slippage=1, commission_type=strategy.commission.percent, commission_value=0.03)
+
+// ==========================================
+// PHASE 1: PARAMETER ABSTRACTION & INPUTS
+// ==========================================
+// Trend Filters
+bool use_trend_filter        = input.bool(true, title="Enable Trend Filters", group="Trend Filter Settings", tooltip="Filter entries based on EMA alignment")
+bool filter_opposing_zones   = input.bool(true, title="Filter Opposing 15m Zones", group="Trend Filter Settings", tooltip="Avoid trading directly into major opposing 15m S&D zones")
+int ema_fast_len             = input.int(20, title="EMA Fast Length", minval=1, group="Trend Filter Settings")
+int ema_med_len              = input.int(50, title="EMA Medium Length", minval=1, group="Trend Filter Settings")
+int ema_slow_len             = input.int(200, title="EMA Slow Length", minval=1, group="Trend Filter Settings")
+
+// Multi-Timeframe (MTF) Settings
+string htf_timeframe         = input.timeframe("15", title="HTF (Big Brother) Timeframe", group="MTF Configuration")
+
+// Supply & Demand (S&D) Zone Identification Settings
+float expansion_mult         = input.float(1.5, title="Expansion ATR Multiplier", minval=0.5, step=0.1, group="S&D Zone Settings", tooltip="How strong the breakout candle must be relative to average ATR to form a zone")
+int atr_len                  = input.int(14, title="ATR Length", minval=1, group="S&D Zone Settings")
+int max_zones                = input.int(5, title="Max Active Zones to Track", minval=1, maxval=10, group="S&D Zone Settings")
+
+// Fibonacci Settings
+int pivot_len                = input.int(5, title="Pivot Lookback Length", minval=1, group="Fibonacci Settings", tooltip="Bars on each side of the pivot for swing high/low detection")
+
+// Position Sizing & Risk Management
+float risk_percent           = input.float(1.0, title="Risk Per Trade (%)", minval=0.1, maxval=10.0, step=0.1, group="Risk Configuration")
+float sl_atr_mult            = input.float(0.5, title="Stop Loss ATR Buffer", minval=0.0, maxval=3.0, step=0.1, group="Risk Configuration", tooltip="Extra SL buffer below/above the zone in ATR units")
+float rr_ratio               = input.float(3.0, title="Risk-to-Reward (R:R) Ratio", minval=1.0, maxval=10.0, step=0.1, group="Risk Configuration")
+bool use_trailing_stop       = input.bool(true, title="Enable Dynamic Trailing Stop", group="Risk Configuration")
+float trail_atr_mult         = input.float(1.5, title="Trailing Stop ATR Multiplier", minval=0.5, step=0.1, group="Risk Configuration")
+
+// Visual Settings
+color bullish_zone_color     = input.color(color.new(color.green, 80), title="5m Demand Zone Color", group="Visuals")
+color bearish_zone_color     = input.color(color.new(color.red, 80), title="5m Supply Zone Color", group="Visuals")
+color bullish_htf_zone_color = input.color(color.new(color.green, 92), title="15m Demand Zone Color", group="Visuals")
+color bearish_htf_zone_color = input.color(color.new(color.red, 92), title="15m Supply Zone Color", group="Visuals")
+color mitigated_zone_color   = input.color(color.new(color.gray, 95), title="Mitigated Zone Color", group="Visuals")
+
+// ==========================================
+// PHASE 2: INDICATOR CALCULATIONS & MTF
+// ==========================================
+// Gap-filling function to ensure continuous MTF lines
+f_fill_gaps(float val) =>
+    var float last_val = na
+    if not na(val)
+        last_val := val
+    last_val
+
+// 1. Local (LTF - 5m) indicators
+float ltf_ema20  = ta.ema(close, ema_fast_len)
+float ltf_ema50  = ta.ema(close, ema_med_len)
+float ltf_ema200 = ta.ema(close, ema_slow_len)
+float ltf_atr    = ta.atr(atr_len)
+
+// 2. Higher Timeframe (HTF - 15m) calculations (requested safely with lookahead=off and gaps=on)
+float h_ema20_val  = ta.ema(close, ema_fast_len)
+float h_ema50_val  = ta.ema(close, ema_med_len)
+float h_ema200_val = ta.ema(close, ema_slow_len)
+float h_atr_val    = ta.atr(atr_len)
+
+bool h_trend_long  = h_ema20_val > h_ema50_val and close > h_ema200_val and close > h_ema20_val and close > h_ema50_val
+bool h_trend_short = h_ema20_val < h_ema50_val and close < h_ema200_val and close < h_ema20_val and close < h_ema50_val
+
+// S&D Zone Formation checks on HTF
+bool h_is_demand_formed = (close > open) and (close - open) > (h_atr_val * expansion_mult) and h_trend_long and (high[1] < close)
+bool h_is_supply_formed = (close < open) and (open - close) > (h_atr_val * expansion_mult) and h_trend_short and (low[1] > close)
+float h_z_top           = high[1]
+float h_z_bottom        = low[1]
+
+// Request MTF data as tuple
+[h_dem, h_sup, h_top, h_bot, h_ema20, h_ema50, h_ema200, h_close] = request.security(
+     syminfo.tickerid,
+     htf_timeframe,
+     [h_is_demand_formed, h_is_supply_formed, h_z_top, h_z_bottom, h_ema20_val, h_ema50_val, h_ema200_val, close],
+     gaps = barmerge.gaps_on,
+     lookahead = barmerge.lookahead_off
+ )
+
+// Fill gaps for requested MTF signals
+float h_ema20_filled  = f_fill_gaps(h_ema20)
+float h_ema50_filled  = f_fill_gaps(h_ema50)
+float h_ema200_filled = f_fill_gaps(h_ema200)
+float h_close_filled  = f_fill_gaps(h_close)
+
+// Trend Direction Logic (EMA alignment)
+bool ltf_bullish_trend = ltf_ema20 > ltf_ema50 and close > ltf_ema200 and close > ltf_ema20 and close > ltf_ema50
+bool ltf_bearish_trend = ltf_ema20 < ltf_ema50 and close < ltf_ema200 and close < ltf_ema20 and close < ltf_ema50
+
+bool htf_bullish_trend = h_ema20_filled > h_ema50_filled and h_close_filled > h_ema200_filled and h_close_filled > h_ema20_filled and h_close_filled > h_ema50_filled
+bool htf_bearish_trend = h_ema20_filled < h_ema50_filled and h_close_filled < h_ema200_filled and h_close_filled < h_ema20_filled and h_close_filled < h_ema50_filled
+
+bool trend_aligned_long  = not use_trend_filter or (ltf_bullish_trend and htf_bullish_trend)
+bool trend_aligned_short = not use_trend_filter or (ltf_bearish_trend and htf_bearish_trend)
+
+// Plot EMAs
+plot(ltf_ema20, title="LTF EMA 20", color=color.blue, linewidth=1)
+plot(ltf_ema50, title="LTF EMA 50", color=color.orange, linewidth=1)
+plot(ltf_ema200, title="LTF EMA 200", color=color.red, linewidth=2)
+
+// ==========================================
+// PHASE 3: SUPPLY & DEMAND ZONE ARCHITECTURE
+// ==========================================
+// Define custom type for S&D Zones
+type Zone
+    float top
+    float bottom
+    int start_bar
+    bool is_demand
+    bool active
+    box visual_box
+
+// Persistent arrays to store the active zones
+var Zone[] demand_zones     = array.new<Zone>()
+var Zone[] supply_zones     = array.new<Zone>()
+var Zone[] htf_demand_zones = array.new<Zone>()
+var Zone[] htf_supply_zones = array.new<Zone>()
+
+// Clean up old boxes if max count exceeded
+clean_oldest_zone(Zone[] zones) =>
+    if array.size(zones) > max_zones
+        Zone oldest = array.shift(zones)
+        if not na(oldest.visual_box)
+            box.delete(oldest.visual_box)
+
+// Detect LTF Zone Formations
+bool is_ltf_demand_formed = (close > open) and (close - open) > (ltf_atr * expansion_mult) and trend_aligned_long and (high[1] < close)
+bool is_ltf_supply_formed = (close < open) and (open - close) > (ltf_atr * expansion_mult) and trend_aligned_short and (low[1] > close)
+
+// Form 5m zones
+if is_ltf_demand_formed
+    float z_top = high[1]
+    float z_bottom = low[1]
+    box b = box.new(left=bar_index - 1, top=z_top, right=bar_index + 10, bottom=z_bottom,
+                    bgcolor=bullish_zone_color, border_color=color.green, border_width=1, border_style=line.style_dashed)
+    Zone new_zone = Zone.new(top=z_top, bottom=z_bottom, start_bar=bar_index - 1, is_demand=true, active=true, visual_box=b)
+    array.push(demand_zones, new_zone)
+    clean_oldest_zone(demand_zones)
+
+if is_ltf_supply_formed
+    float z_top = high[1]
+    float z_bottom = low[1]
+    box b = box.new(left=bar_index - 1, top=z_top, right=bar_index + 10, bottom=z_bottom,
+                    bgcolor=bearish_zone_color, border_color=color.red, border_width=1, border_style=line.style_dashed)
+    Zone new_zone = Zone.new(top=z_top, bottom=z_bottom, start_bar=bar_index - 1, is_demand=false, active=true, visual_box=b)
+    array.push(supply_zones, new_zone)
+    clean_oldest_zone(supply_zones)
+
+// Form 15m zones when requested HTF signals are detected
+bool h_dem_formed_here = not na(h_dem) and h_dem
+bool h_sup_formed_here = not na(h_sup) and h_sup
+
+if h_dem_formed_here
+    float z_top = h_top
+    float z_bottom = h_bot
+    box b = box.new(left=bar_index - 3, top=z_top, right=bar_index + 10, bottom=z_bottom,
+                    bgcolor=bullish_htf_zone_color, border_color=color.green, border_width=2, border_style=line.style_solid)
+    Zone new_zone = Zone.new(top=z_top, bottom=z_bottom, start_bar=bar_index - 3, is_demand=true, active=true, visual_box=b)
+    array.push(htf_demand_zones, new_zone)
+    clean_oldest_zone(htf_demand_zones)
+
+if h_sup_formed_here
+    float z_top = h_top
+    float z_bottom = h_bot
+    box b = box.new(left=bar_index - 3, top=z_top, right=bar_index + 10, bottom=z_bottom,
+                    bgcolor=bearish_htf_zone_color, border_color=color.red, border_width=2, border_style=line.style_solid)
+    Zone new_zone = Zone.new(top=z_top, bottom=z_bottom, start_bar=bar_index - 3, is_demand=false, active=true, visual_box=b)
+    array.push(htf_supply_zones, new_zone)
+    clean_oldest_zone(htf_supply_zones)
+
+// Update S&D Zone boxes and mitigation status (both 5m and 15m)
+update_and_mitigate_zones(Zone[] zones, bool is_dem) =>
+    if array.size(zones) > 0
+        for i = array.size(zones) - 1 to 0
+            Zone z = array.get(zones, i)
+            if z.active
+                // Extend box rightward to current bar
+                box.set_right(z.visual_box, bar_index)
+
+                // Mitigation checks
+                if is_dem
+                    if close < z.bottom
+                        z.active := false
+                        box.set_bgcolor(z.visual_box, mitigated_zone_color)
+                        box.set_border_color(z.visual_box, color.gray)
+                        box.set_border_style(z.visual_box, line.style_dotted)
+                else
+                    if close > z.top
+                        z.active := false
+                        box.set_bgcolor(z.visual_box, mitigated_zone_color)
+                        box.set_border_color(z.visual_box, color.gray)
+                        box.set_border_style(z.visual_box, line.style_dotted)
+
+update_and_mitigate_zones(demand_zones, true)
+update_and_mitigate_zones(supply_zones, false)
+update_and_mitigate_zones(htf_demand_zones, true)
+update_and_mitigate_zones(htf_supply_zones, false)
+
+// ==========================================
+// PHASE 4: FIBONACCI CONFLUENCE ENGINE
+// ==========================================
+var float swing_low  = na
+var float swing_high = na
+
+float ph = ta.pivothigh(high, pivot_len, pivot_len)
+float pl = ta.pivotlow(low, pivot_len, pivot_len)
+
+if not na(ph)
+    swing_high := ph
+if not na(pl)
+    swing_low := pl
+
+// Calculate Fibonacci retracement levels for current leg
+float fib_382_long  = na
+float fib_500_long  = na
+float fib_618_long  = na
+
+float fib_382_short = na
+float fib_500_short = na
+float fib_618_short = na
+
+if not na(swing_low) and not na(swing_high)
+    // Long Retracement Levels
+    fib_382_long  := swing_high - 0.382 * (swing_high - swing_low)
+    fib_500_long  := swing_high - 0.500 * (swing_high - swing_low)
+    fib_618_long  := swing_high - 0.618 * (swing_high - swing_low)
+
+    // Short Retracement Levels
+    fib_382_short := swing_low + 0.382 * (swing_high - swing_low)
+    fib_500_short := swing_low + 0.500 * (swing_high - swing_low)
+    fib_618_short := swing_low + 0.618 * (swing_high - swing_low)
+
+// Overlap check: current bar overlaps with the 38.2% to 61.8% Fibonacci retracement area
+bool fib_confluence_long  = not na(swing_low) and not na(swing_high) and (low <= fib_382_long and high >= fib_618_long)
+bool fib_confluence_short = not na(swing_low) and not na(swing_high) and (high >= fib_382_short and low <= fib_618_short)
+
+// ==========================================
+// PHASE 5: ENTRY SIGNAL & NESTING LOGIC
+// ==========================================
+// Helper functions to check for nesting and return the active 15m zone
+get_nesting_demand_zone(float ltf_top, float ltf_bottom, Zone[] htf_demands) =>
+    Zone result = na
+    if array.size(htf_demands) > 0
+        for i = 0 to array.size(htf_demands) - 1
+            Zone hz = array.get(htf_demands, i)
+            if hz.active
+                if ltf_bottom >= hz.bottom and ltf_top <= hz.top
+                    result := hz
+                    break
+    result
+
+get_nesting_supply_zone(float ltf_top, float ltf_bottom, Zone[] htf_supplies) =>
+    Zone result = na
+    if array.size(htf_supplies) > 0
+        for i = 0 to array.size(htf_supplies) - 1
+            Zone hz = array.get(htf_supplies, i)
+            if hz.active
+                if ltf_bottom >= hz.bottom and ltf_top <= hz.top
+                    result := hz
+                    break
+    result
+
+// Filter to avoid trading into major opposing 15m zones
+bool into_opposing_supply = false
+if filter_opposing_zones and array.size(htf_supply_zones) > 0
+    for i = 0 to array.size(htf_supply_zones) - 1
+        Zone hz = array.get(htf_supply_zones, i)
+        if hz.active
+            if close >= hz.bottom
+                into_opposing_supply := true
+                break
+
+bool into_opposing_demand = false
+if filter_opposing_zones and array.size(htf_demand_zones) > 0
+    for i = 0 to array.size(htf_demand_zones) - 1
+        Zone hz = array.get(htf_demand_zones, i)
+        if hz.active
+            if close <= hz.top
+                into_opposing_demand := true
+                break
+
+// Core Execution check
+Zone active_demand = na
+Zone nesting_15m_demand = na
+if array.size(demand_zones) > 0
+    for i = array.size(demand_zones) - 1 to 0
+        Zone z = array.get(demand_zones, i)
+        if z.active and bar_index > z.start_bar + 1
+            if (low <= z.top) and (high >= z.bottom)
+                // Check if this 5m zone is nested inside any active 15m Demand zone
+                Zone hz = get_nesting_demand_zone(z.top, z.bottom, htf_demand_zones)
+                if not na(hz)
+                    active_demand := z
+                    nesting_15m_demand := hz
+                    break
+
+Zone active_supply = na
+Zone nesting_15m_supply = na
+if array.size(supply_zones) > 0
+    for i = array.size(supply_zones) - 1 to 0
+        Zone z = array.get(supply_zones, i)
+        if z.active and bar_index > z.start_bar + 1
+            if (high >= z.bottom) and (low <= z.top)
+                // Check if this 5m zone is nested inside any active 15m Supply zone
+                Zone hz = get_nesting_supply_zone(z.top, z.bottom, htf_supply_zones)
+                if not na(hz)
+                    active_supply := z
+                    nesting_15m_supply := hz
+                    break
+
+// Trigger Conditions
+bool test_demand_zone = not na(active_demand) and not na(nesting_15m_demand)
+bool test_supply_zone = not na(active_supply) and not na(nesting_15m_supply)
+
+// Entry Signals
+bool buy_signal  = trend_aligned_long and test_demand_zone and fib_confluence_long and not into_opposing_supply and (strategy.position_size == 0)
+bool sell_signal = trend_aligned_short and test_supply_zone and fib_confluence_short and not into_opposing_demand and (strategy.position_size == 0)
+
+// Persistent trade variables for risk calculation
+var float entry_price = 0.0
+var float stop_loss   = 0.0
+var float take_profit = 0.0
+
+if buy_signal
+    entry_price := close
+    // Stop Loss placed at the outer boundary of the 15m zone to prevent premature stops
+    stop_loss   := nesting_15m_demand.bottom - (ltf_atr * sl_atr_mult)
+    float risk  = entry_price - stop_loss
+    if risk <= 0
+        risk := ltf_atr * 1e-10
+    take_profit := entry_price + (risk * rr_ratio)
+
+    // Risk-based position sizing
+    float risk_capital = strategy.equity * (risk_percent / 100.0)
+    float position_units = risk > 0 ? risk_capital / risk : na
+
+    if not na(position_units)
+        strategy.entry("Long", strategy.long, qty=position_units)
+
+        // Deactivate/mitigate tested zones
+        active_demand.active := false
+        box.set_bgcolor(active_demand.visual_box, mitigated_zone_color)
+        box.set_border_color(active_demand.visual_box, color.gray)
+        box.set_border_style(active_demand.visual_box, line.style_dotted)
+
+        // Label visualization
+        label.new(x=bar_index, y=low, text="BUY", color=color.green, textcolor=color.white, style=label.style_label_up, yloc=yloc.belowbar)
+
+        // Webhook JSON Alert Payload for BUY
+        string alert_json = '{"ticker": "' + syminfo.ticker + '", "action": "BUY", "price": ' + str.tostring(entry_price) + ', "stop_loss": ' + str.tostring(stop_loss) + ', "take_profit": ' + str.tostring(take_profit) + '}'
+        alert(alert_json, alert.freq_once_per_bar)
+
+if sell_signal
+    entry_price := close
+    // Stop Loss placed at the outer boundary of the 15m zone to prevent premature stops
+    stop_loss   := nesting_15m_supply.top + (ltf_atr * sl_atr_mult)
+    float risk  = stop_loss - entry_price
+    if risk <= 0
+        risk := ltf_atr * 1e-10
+    take_profit := entry_price - (risk * rr_ratio)
+
+    // Risk-based position sizing
+    float risk_capital = strategy.equity * (risk_percent / 100.0)
+    float position_units = risk > 0 ? risk_capital / risk : na
+
+    if not na(position_units)
+        strategy.entry("Short", strategy.short, qty=position_units)
+
+        // Deactivate/mitigate tested zones
+        active_supply.active := false
+        box.set_bgcolor(active_supply.visual_box, mitigated_zone_color)
+        box.set_border_color(active_supply.visual_box, color.gray)
+        box.set_border_style(active_supply.visual_box, line.style_dotted)
+
+        // Label visualization
+        label.new(x=bar_index, y=high, text="SELL", color=color.red, textcolor=color.white, style=label.style_label_down, yloc=yloc.abovebar)
+
+        // Webhook JSON Alert Payload for SELL
+        string alert_json = '{"ticker": "' + syminfo.ticker + '", "action": "SELL", "price": ' + str.tostring(entry_price) + ', "stop_loss": ' + str.tostring(stop_loss) + ', "take_profit": ' + str.tostring(take_profit) + '}'
+        alert(alert_json, alert.freq_once_per_bar)
+
+// ==========================================
+// PHASE 6: RISK MANAGEMENT & EXIT ENGINE
+// ==========================================
+// Dynamic Trailing Stop Logic
+if strategy.position_size != 0 and use_trailing_stop
+    if strategy.position_size > 0
+        float trail_sl = ta.lowest(low, 5) - (ltf_atr * trail_atr_mult)
+        if trail_sl > stop_loss
+            stop_loss := trail_sl
+    else
+        float trail_sl = ta.highest(high, 5) + (ltf_atr * trail_atr_mult)
+        if trail_sl < stop_loss
+            stop_loss := trail_sl
+
+// Apply Bracket Orders for Exit
+if strategy.position_size > 0
+    strategy.exit("Exit Long", "Long", stop=stop_loss, limit=take_profit)
+else if strategy.position_size < 0
+    strategy.exit("Exit Short", "Short", stop=stop_loss, limit=take_profit)
+
+// ==========================================
+// PHASE 7: REAL-TIME EXIT ALERTS & BACKTEST SYNC
+// ==========================================
+bool long_active_prev  = strategy.position_size[1] > 0
+bool short_active_prev = strategy.position_size[1] < 0
+bool long_closed       = long_active_prev and strategy.position_size <= 0
+bool short_closed      = short_active_prev and strategy.position_size >= 0
+
+int total_closed = strategy.closedtrades
+
+if long_closed
+    float exit_p = total_closed > 0 ? strategy.closedtrades.exit_price(total_closed - 1) : close
+    float profit_val = total_closed > 0 ? strategy.closedtrades.profit(total_closed - 1) : 0.0
+    string reason = "EXIT"
+    if total_closed > 0
+        reason := strategy.closedtrades.profit(total_closed - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
+
+    string alert_exit_json = '{"ticker": "' + syminfo.ticker + '", "action": "EXIT_LONG", "price": ' + str.tostring(exit_p) + ', "profit": ' + str.tostring(profit_val) + ', "reason": "' + reason + '"}'
+    alert(alert_exit_json, alert.freq_once_per_bar)
+
+if short_closed
+    float exit_p = total_closed > 0 ? strategy.closedtrades.exit_price(total_closed - 1) : close
+    float profit_val = total_closed > 0 ? strategy.closedtrades.profit(total_closed - 1) : 0.0
+    string reason = "EXIT"
+    if total_closed > 0
+        reason := strategy.closedtrades.profit(total_closed - 1) >= 0 ? "TAKE_PROFIT" : "STOP_LOSS"
+
+    string alert_exit_json = '{"ticker": "' + syminfo.ticker + '", "action": "EXIT_SHORT", "price": ' + str.tostring(exit_p) + ', "profit": ' + str.tostring(profit_val) + ', "reason": "' + reason + '"}'
+    alert(alert_exit_json, alert.freq_once_per_bar)
+
+// ==========================================
+// PHASE 8: ALERT CONDITIONS (GLOBAL SCOPE)
+// ==========================================
+alertcondition(buy_signal, title="Buy Signal", message="Institutional BUY Signal Triggered!")
+alertcondition(sell_signal, title="Sell Signal", message="Institutional SELL Signal Triggered!")
