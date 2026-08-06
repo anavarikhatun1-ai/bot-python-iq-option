@@ -1,0 +1,218 @@
+//@version=5
+indicator("Professional Ichimoku Cloud Execution Engine (Bazaar Ke Mahir)", shorttitle="Pro Ichimoku EE", overlay=true, precision=6)
+
+// ==========================================
+// INSTITUTIONAL CONFIGURATION
+// ==========================================
+// Standard Institutional Settings perfectly aligned for index and asset volatility
+tenkan_periods   = input.int(9, title="Tenkan-sen (Conversion Line) Periods", minval=1, tooltip="Periods for the Conversion Line (Standard: 9)")
+kijun_periods    = input.int(26, title="Kijun-sen (Base Line) Periods", minval=1, tooltip="Periods for the Base Line (Standard: 26)")
+senkou_b_periods = input.int(52, title="Senkou Span B Periods", minval=1, tooltip="Periods for Leading Span B (Standard: 52)")
+displacement     = input.int(26, title="Lagging Span / Kumo Displacement", minval=1, tooltip="Offset displacement for Lagging Span & Cloud (Standard: 26)")
+
+// ==========================================
+// FILTER AND MODE INPUTS
+// ==========================================
+crossover_mode      = input.string("Strict (Crossover on Current Bar)", title="Crossover Confirmation Mode",
+     options=["Strict (Crossover on Current Bar)", "Flexible (Crossover within Lookback Window)"],
+     tooltip="Strict mode requires Tenkan/Kijun crossover on the exact signal bar. Flexible mode allows crossover to have occurred within a lookback window as long as the trend direction is sustained.")
+lookback_len        = input.int(5, title="Crossover Lookback Window (Flexible Mode)", minval=1, tooltip="Lookback window size (in bars) for Flexible mode")
+chikou_filter_type  = input.string("Close vs Close", title="Lagging Span Filter Type",
+     options=["Close vs Close", "Close vs High/Low", "Disabled"],
+     tooltip="How the Lagging Span (Chikou) is compared against historical price action 26 candles ago.")
+buffer_type         = input.string("ATR Multiple", title="Stop Loss Buffer Type",
+     options=["ATR Multiple", "Percentage", "Ticks", "None"],
+     tooltip="Method used to calculate the noise-filtering buffer below/above the Kijun-sen Base Line.")
+buffer_value        = input.float(0.5, title="Stop Loss Buffer Value", minval=0.0, step=0.1, tooltip="Multiplier/Value for the selected Stop Loss Buffer.")
+atr_len             = input.int(14, title="ATR Length for Buffer", minval=1, tooltip="Length of ATR used if 'ATR Multiple' is selected.")
+
+// ==========================================
+// ICHIMOKU CALCULATIONS
+// ==========================================
+// Tenkan-sen (Conversion Line): Midpoint of 9-period high and low (plotted as Blue)
+tenkan = math.avg(ta.highest(high, tenkan_periods), ta.lowest(low, tenkan_periods))
+
+// Kijun-sen (Base Line): Midpoint of 26-period high and low (plotted as Red)
+kijun = math.avg(ta.highest(high, kijun_periods), ta.lowest(low, kijun_periods))
+
+// Senkou Span A (Leading Span A): Midpoint of Tenkan and Kijun, plotted 26 periods ahead
+senkouA = math.avg(tenkan, kijun)
+
+// Senkou Span B (Leading Span B): Midpoint of 52-period high and low, plotted 26 periods ahead
+senkouB = math.avg(ta.highest(high, senkou_b_periods), ta.lowest(low, senkou_b_periods))
+
+// ==========================================
+// VISUAL PLOTTING: ICHIMOKU LINES
+// ==========================================
+plot(tenkan, color=color.blue, title="Tenkan-sen (Conversion Line)", linewidth=2)
+plot(kijun, color=color.red, title="Kijun-sen (Base Line)", linewidth=2)
+
+// Plotting Chikou Span (Lagging Span) - plotted 26 periods behind
+// Note: We use show_last to avoid plotting into the future space improperly
+plot(close, offset=-displacement, color=color.green, title="Chikou Span (Lagging Span)", linewidth=1)
+
+// Plotting Senkou Spans with forward offset
+p1 = plot(senkouA, offset=displacement, color=color.new(color.green, 50), title="Senkou Span A")
+p2 = plot(senkouB, offset=displacement, color=color.new(color.red, 50), title="Senkou Span B")
+
+// Dynamic Kumo Cloud Fill based on bullish/bearish leading span
+fill_color = senkouA > senkouB ? color.new(color.green, 92) : color.new(color.red, 92)
+fill(p1, p2, color=fill_color, title="Kumo Cloud Fill")
+
+// ==========================================
+// THREE-PILLAR CONFIRMATION SYSTEM
+// ==========================================
+
+// --- Pillar 1: The Crossover (Trend Start) ---
+var int last_long_cross = 0
+var int last_short_cross = 0
+
+if ta.crossover(tenkan, kijun)
+    last_long_cross := bar_index
+if ta.crossunder(tenkan, kijun)
+    last_short_cross := bar_index
+
+long_cross_active = (crossover_mode == "Strict (Crossover on Current Bar)") ?
+     ta.crossover(tenkan, kijun) :
+     (bar_index - last_long_cross <= lookback_len and tenkan > kijun)
+
+short_cross_active = (crossover_mode == "Strict (Crossover on Current Bar)") ?
+     ta.crossunder(tenkan, kijun) :
+     (bar_index - last_short_cross <= lookback_len and tenkan < kijun)
+
+// --- Pillar 2: Trap Identification (Lagging Span Filter) ---
+// Lagging Span (Chikou) is compared with the price action from 26 candles ago.
+chikou_long = true
+chikou_short = true
+
+if chikou_filter_type == "Close vs Close"
+    chikou_long  := close > close[displacement]
+    chikou_short := close < close[displacement]
+else if chikou_filter_type == "Close vs High/Low"
+    chikou_long  := close > high[displacement]
+    chikou_short := close < low[displacement]
+
+// --- Pillar 3: The Cloud Protection (Final Confirmation) ---
+// Cloud values at the current bar are actually the Senkou Span values calculated 26 periods ago
+kumo_a_current = senkouA[displacement]
+kumo_b_current = senkouB[displacement]
+kumo_upper = math.max(kumo_a_current, kumo_b_current)
+kumo_lower = math.min(kumo_a_current, kumo_b_current)
+
+// Candle must close above/below the Cloud to confirm dynamic support/resistance
+cloud_long_confirmed  = close > kumo_upper
+cloud_short_confirmed = close < kumo_lower
+
+// Combined Entry Signals (All 3 Pillars met simultaneously)
+buy_signal  = long_cross_active and chikou_long and cloud_long_confirmed
+sell_signal = short_cross_active and chikou_short and cloud_short_confirmed
+
+// ==========================================
+// EXECUTION & RISK MANAGEMENT ENGINE
+// ==========================================
+// We simulate active trade levels in real-time to track execution, SL, and TP.
+var int trade_state = 0 // 0 = Idle, 1 = Long, -1 = Short
+var float entry_price = 0.0
+var float sl_price = 0.0
+var float tp_price = 0.0
+var int entry_bar_index = 0
+
+// Calculate Stop Loss Buffer Size based on user input
+atr_val = ta.atr(atr_len)
+float buffer_size = 0.0
+
+if buffer_type == "ATR Multiple"
+    buffer_size := atr_val * buffer_value
+else if buffer_type == "Percentage"
+    buffer_size := close * (buffer_value / 100.0)
+else if buffer_type == "Ticks"
+    buffer_size := syminfo.mintick * buffer_value
+
+// --- Exit Evaluation (evaluated on subsequent bars to avoid lookahead/same-bar exit bias) ---
+bool exit_long_sl  = false
+bool exit_long_tp  = false
+bool exit_short_sl = false
+bool exit_short_tp = false
+
+if trade_state == 1 and bar_index > entry_bar_index
+    if low <= sl_price
+        exit_long_sl := true
+        trade_state  := 0
+    else if high >= tp_price
+        exit_long_tp := true
+        trade_state  := 0
+
+if trade_state == -1 and bar_index > entry_bar_index
+    if high >= sl_price
+        exit_short_sl := true
+        trade_state   := 0
+    else if low <= tp_price
+        exit_short_tp := true
+        trade_state   := 0
+
+// --- Entry Processing ---
+// Standard mode only triggers a trade if not already in an active simulated trade.
+trigger_buy  = buy_signal and (trade_state == 0)
+trigger_sell = sell_signal and (trade_state == 0)
+
+// Calculate candidate SL and TP levels at trigger time
+float candidate_long_sl  = kijun - buffer_size
+float candidate_short_sl = kijun + buffer_size
+
+// Ensure SL is strictly on the correct side of price action (accounting for potential extreme spikes)
+if candidate_long_sl >= close
+    candidate_long_sl := close - (syminfo.mintick * 10)
+if candidate_short_sl <= close
+    candidate_short_sl := close + (syminfo.mintick * 10)
+
+float candidate_long_risk = close - candidate_long_sl
+float candidate_long_tp   = close + (2.0 * candidate_long_risk)
+
+float candidate_short_risk = candidate_short_sl - close
+float candidate_short_tp   = close - (2.0 * candidate_short_risk)
+
+if trigger_buy
+    trade_state     := 1
+    entry_price     := close
+    sl_price        := candidate_long_sl
+    tp_price        := candidate_long_tp
+    entry_bar_index := bar_index
+
+if trigger_sell
+    trade_state     := -1
+    entry_price     := close
+    sl_price        := candidate_short_sl
+    tp_price        := candidate_short_tp
+    entry_bar_index := bar_index
+
+// ==========================================
+// VISUAL UI & ALERTS
+// ==========================================
+// Display high-visibility Buy and Sell labels (Screenshot Style)
+plotshape(trigger_buy, title="Buy Signal", style=shape.labelup, location=location.belowbar,
+          color=color.green, text="BUY", textcolor=color.white, size=size.normal)
+
+plotshape(trigger_sell, title="Sell Signal", style=shape.labeldown, location=location.abovebar,
+          color=color.red, text="SELL", textcolor=color.white, size=size.normal)
+
+// Display trade resolution points (SL vs TP hits)
+plotshape(exit_long_sl, title="Long Stop Loss Hit", style=shape.xcross, location=location.belowbar,
+          color=color.red, size=size.small, text="SL Hit", textcolor=color.red)
+plotshape(exit_long_tp, title="Long Take Profit Hit", style=shape.circle, location=location.abovebar,
+          color=color.green, size=size.small, text="TP Hit", textcolor=color.green)
+
+plotshape(exit_short_sl, title="Short Stop Loss Hit", style=shape.xcross, location=location.abovebar,
+          color=color.red, size=size.small, text="SL Hit", textcolor=color.red)
+plotshape(exit_short_tp, title="Short Take Profit Hit", style=shape.circle, location=location.belowbar,
+          color=color.green, size=size.small, text="TP Hit", textcolor=color.green)
+
+// Plot the active trade levels dynamically (breaks lines when idle)
+plot(trade_state != 0 ? entry_price : na, title="Active Trade Entry Price", color=color.gray, style=plot.style_linebr, linewidth=1)
+plot(trade_state != 0 ? sl_price : na, title="Active Trade Stop Loss", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(trade_state != 0 ? tp_price : na, title="Active Trade Take Profit", color=color.green, style=plot.style_linebr, linewidth=2)
+
+// --- Mobile and Browser Notifications via alertcondition ---
+alertcondition(trigger_buy, title="Bazaar Ke Mahir: Buy Signal",
+               message="[Bazaar Ke Mahir] Triple Blessing BUY Signal Triggered on {{ticker}} ({{interval}}). Entry close: {{close}}.")
+alertcondition(trigger_sell, title="Bazaar Ke Mahir: Sell Signal",
+               message="[Bazaar Ke Mahir] Triple Blessing SELL Signal Triggered on {{ticker}} ({{interval}}). Entry close: {{close}}.")
