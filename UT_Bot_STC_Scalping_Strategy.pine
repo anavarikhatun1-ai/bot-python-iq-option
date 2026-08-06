@@ -1,0 +1,231 @@
+//@version=5
+indicator("UT Bot & STC High-Precision Scalping Strategy", overlay=true)
+
+// ==========================================
+// 1. INPUT PANEL PARAMETERS
+// ==========================================
+
+// General Settings
+group_gen = "General Settings"
+src_input = input.source(close, "Source Price", group=group_gen, tooltip="Primary source for all indicator calculations")
+
+// UT Bot Instance A (Sell Filter)
+group_ut_a = "UT Bot Instance A (Sell Filter)"
+key_value_a = input.float(2.0, "Key Value (Sensitivity)", group=group_ut_a, tooltip="Sensitivity multiplier for ATR trailing stop (Instance A)")
+atr_period_a = input.int(1, "ATR Period", group=group_ut_a, tooltip="Lookback period for ATR calculation (Instance A)")
+
+// UT Bot Instance B (Buy Filter)
+group_ut_b = "UT Bot Instance B (Buy Filter)"
+key_value_b = input.float(2.0, "Key Value (Sensitivity)", group=group_ut_b, tooltip="Sensitivity multiplier for ATR trailing stop (Instance B)")
+atr_period_b = input.int(300, "ATR Period", group=group_ut_b, tooltip="Lookback period for ATR calculation (Instance B)")
+
+// STC Oscillator
+group_stc = "Schaff Trend Cycle (STC) Oscillator"
+stc_length = input.int(80, "STC Length", group=group_stc, tooltip="Cycle length for the double-smoothed stochastic")
+stc_fast_length = input.int(227, "Fast Length", group=group_stc, tooltip="Fast EMA period for the underlying MACD")
+stc_slow_length = input.int(500, "Slow Length", group=group_stc, tooltip="Slow EMA period for the underlying MACD")
+stc_factor = input.float(0.5, "Smoothing Factor", group=group_stc, tooltip="Smoothing multiplier for cycle cycles")
+stc_oversold = input.float(25.0, "Oversold Threshold (Green Line)", group=group_stc, tooltip="The level below which the STC is considered oversold")
+stc_overbought = input.float(75.0, "Overbought Threshold (Red Line)", group=group_stc, tooltip="The level above which the STC is considered overbought")
+
+// Risk Management
+group_risk = "Risk Management"
+swing_lookback = input.int(10, "Swing High/Low Lookback", group=group_risk, tooltip="Lookback bars to define recent swing highs/lows")
+swing_buffer_atr_mult = input.float(0.1, "Swing SL Buffer (ATR Mult)", group=group_risk, tooltip="Buffer added/subtracted to/from the swing level in units of ATR")
+rr_ratio = input.float(2.0, "Risk-to-Reward Ratio (1:X)", group=group_risk, tooltip="Profit target multiplier based on the stop loss distance")
+
+// Display Settings
+group_disp = "Display Settings"
+show_sl_tp = input.bool(true, "Show SL/TP Lines", group=group_disp, tooltip="Enable/Disable plotting of dynamic SL and TP levels")
+show_dashboard = input.bool(true, "Show Dashboard Table", group=group_disp, tooltip="Enable/Disable the statistics dashboard in the corner")
+
+// ==========================================
+// 2. TIMEFRAME OPTIMIZATION LOGIC
+// ==========================================
+
+current_tf_minutes = timeframe.isdaily ? 1440 : (timeframe.isweekly ? 10080 : (timeframe.ismonthly ? 43200 : timeframe.multiplier))
+use_mtf = current_tf_minutes < 5
+tf_optimized = use_mtf ? "5" : timeframe.period
+
+// ==========================================
+// 3. CORE INDICATOR CALCULATIONS
+// ==========================================
+
+// --- UT Bot Instance A (Sell Filter) ---
+atr_a = ta.atr(atr_period_a)
+nLoss_a = key_value_a * atr_a
+
+var float trailing_stop_a = na
+if na(trailing_stop_a)
+    trailing_stop_a := src_input - nLoss_a
+else
+    if src_input > trailing_stop_a[1] and src_input[1] > trailing_stop_a[1]
+        trailing_stop_a := math.max(trailing_stop_a[1], src_input - nLoss_a)
+    else if src_input < trailing_stop_a[1] and src_input[1] < trailing_stop_a[1]
+        trailing_stop_a := math.min(trailing_stop_a[1], src_input + nLoss_a)
+    else if src_input > trailing_stop_a[1]
+        trailing_stop_a := src_input - nLoss_a
+    else
+        trailing_stop_a := src_input + nLoss_a
+
+sell_signal_a = ta.crossunder(src_input, trailing_stop_a)
+
+// --- UT Bot Instance B (Buy Filter) ---
+atr_b = ta.atr(atr_period_b)
+nLoss_b = key_value_b * atr_b
+
+var float trailing_stop_b = na
+if na(trailing_stop_b)
+    trailing_stop_b := src_input - nLoss_b
+else
+    if src_input > trailing_stop_b[1] and src_input[1] > trailing_stop_b[1]
+        trailing_stop_b := math.max(trailing_stop_b[1], src_input - nLoss_b)
+    else if src_input < trailing_stop_b[1] and src_input[1] < trailing_stop_b[1]
+        trailing_stop_b := math.min(trailing_stop_b[1], src_input + nLoss_b)
+    else if src_input > trailing_stop_b[1]
+        trailing_stop_b := src_input - nLoss_b
+    else
+        trailing_stop_b := src_input + nLoss_b
+
+buy_signal_b = ta.crossover(src_input, trailing_stop_b)
+
+// --- Schaff Trend Cycle (STC) Oscillator ---
+stc_macd_fast_ma = ta.ema(src_input, stc_fast_length)
+stc_macd_slow_ma = ta.ema(src_input, stc_slow_length)
+stc_macd = stc_macd_fast_ma - stc_macd_slow_ma
+
+stc_lowest_macd = ta.lowest(stc_macd, stc_length)
+stc_range_macd = ta.highest(stc_macd, stc_length) - stc_lowest_macd
+stc_gamma = stc_range_macd > 0 ? (stc_macd - stc_lowest_macd) / stc_range_macd * 100.0 : 0.0
+
+var float stc_delta = na
+stc_delta := na(stc_delta[1]) ? stc_gamma : stc_delta[1] + stc_factor * (stc_gamma - stc_delta[1])
+
+stc_lowest_delta = ta.lowest(stc_delta, stc_length)
+stc_range_delta = ta.highest(stc_delta, stc_length) - stc_lowest_delta
+stc_eta = stc_range_delta > 0 ? (stc_delta - stc_lowest_delta) / stc_range_delta * 100.0 : 0.0
+
+var float stc_val = na
+stc_val := na(stc_val[1]) ? stc_eta : stc_val[1] + stc_factor * (stc_eta - stc_val[1])
+
+// ==========================================
+// 4. NON-REPAINTING MTF REQUESTS
+// ==========================================
+
+// Request already-closed values from the optimized timeframe to prevent repainting
+[stc_raw, stc_prev_raw, buy_b_raw, sell_a_raw] = request.security(
+     syminfo.tickerid,
+     tf_optimized,
+     [stc_val[1], stc_val[2], buy_signal_b[1] ? 1.0 : 0.0, sell_signal_a[1] ? 1.0 : 0.0],
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off
+ )
+
+// Detect first lower timeframe bar of new higher timeframe candle (boolean conversion)
+new_bar_mtf = not na(ta.change(time(tf_optimized)))
+
+// Final resolved variables for indicator evaluation
+stc_final = use_mtf ? stc_raw : stc_val
+stc_prev_final = use_mtf ? stc_prev_raw : stc_val[1]
+buy_signal_final = use_mtf ? (not na(buy_b_raw) and buy_b_raw == 1.0 and new_bar_mtf) : buy_signal_b
+sell_signal_final = use_mtf ? (not na(sell_a_raw) and sell_a_raw == 1.0 and new_bar_mtf) : sell_signal_a
+
+stc_trending_up = stc_final > stc_prev_final
+stc_trending_down = stc_final < stc_prev_final
+
+// ==========================================
+// 5. TRADE ENTRY CONDITIONS
+// ==========================================
+
+long_cond = buy_signal_final and stc_final < stc_oversold and stc_trending_up
+short_cond = sell_signal_final and stc_final > stc_overbought and stc_trending_down
+
+// ==========================================
+// 6. RISK MANAGEMENT & STATE TRACKING
+// ==========================================
+
+// Dynamic Stop Loss levels based on recent swings
+atr_val = ta.atr(14)
+buffer = atr_val * swing_buffer_atr_mult
+
+sl_long_candidate = ta.lowest(low, swing_lookback) - buffer
+sl_short_candidate = ta.highest(high, swing_lookback) + buffer
+
+// Tracking state variables (retained across bars using var)
+var float entry_price = na
+var float sl_price = na
+var float tp_price = na
+var int trade_dir = 0 // 1 = Long, -1 = Short, 0 = No position
+
+// Trigger and Manage positions
+if trade_dir == 0
+    if long_cond
+        entry_price := close
+        sl_price := sl_long_candidate
+        tp_price := close + (close - sl_long_candidate) * rr_ratio
+        trade_dir := 1
+    else if short_cond
+        entry_price := close
+        sl_price := sl_short_candidate
+        tp_price := close - (sl_short_candidate - close) * rr_ratio
+        trade_dir := -1
+else if trade_dir == 1
+    if low <= sl_price or high >= tp_price
+        trade_dir := 0
+        entry_price := na
+        sl_price := na
+        tp_price := na
+else if trade_dir == -1
+    if high >= sl_price or low <= tp_price
+        trade_dir := 0
+        entry_price := na
+        sl_price := na
+        tp_price := na
+
+// ==========================================
+// 7. VISUAL INTERFACE (SIGNAL DISPLAY)
+// ==========================================
+
+// Rectangular 'Buy' and 'Sell' labels
+if long_cond
+    label.new(bar_index, low, text="BUY", color=color.green, textcolor=color.white, style=label.style_label_up, yloc=yloc.belowbar, size=size.normal)
+
+if short_cond
+    label.new(bar_index, high, text="SELL", color=color.red, textcolor=color.white, style=label.style_label_down, yloc=yloc.abovebar, size=size.normal)
+
+// Stop Loss and Take Profit plotting
+has_position = (trade_dir != 0) or long_cond or short_cond
+plot(show_sl_tp and has_position ? sl_price : na, "Stop Loss", color=color.new(color.red, 30), style=plot.style_linebr, linewidth=2)
+plot(show_sl_tp and has_position ? tp_price : na, "Take Profit", color=color.new(color.green, 30), style=plot.style_linebr, linewidth=2)
+
+// Corner Dashboard
+var table dashboard = table.new(position.top_right, 2, 4, bgcolor=color.new(color.black, 30), border_color=color.gray, border_width=1)
+if show_dashboard and barstate.islast
+    table.cell(dashboard, 0, 0, "Parameter", text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.small)
+    table.cell(dashboard, 1, 0, "Current State", text_color=color.white, bgcolor=color.new(color.gray, 20), text_size=size.small)
+
+    table.cell(dashboard, 0, 1, "TF Optimized", text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 1, tf_optimized + " Min" + (use_mtf ? " (MTF Forced)" : ""), text_color=color.yellow, text_size=size.small)
+
+    table.cell(dashboard, 0, 2, "STC Value", text_color=color.white, text_size=size.small)
+    stc_color = stc_trending_up ? color.green : color.red
+    table.cell(dashboard, 1, 2, str.tostring(stc_final, "#.##"), text_color=stc_color, text_size=size.small)
+
+    table.cell(dashboard, 0, 3, "STC Trend", text_color=color.white, text_size=size.small)
+    stc_trend_text = stc_trending_up ? "UPWARD" : "DOWNWARD"
+    table.cell(dashboard, 1, 3, stc_trend_text, text_color=stc_color, text_size=size.small)
+
+// ==========================================
+// 8. AUTOMATED ALERTS
+// ==========================================
+
+// Standard alertcondition endpoints for third-party automation
+alertcondition(long_cond, title="Long Entry Trigger", message="UT Bot Alerts & STC: Long entry confirmed! Entry: {{close}}")
+alertcondition(short_cond, title="Short Entry Trigger", message="UT Bot Alerts & STC: Short entry confirmed! Entry: {{close}}")
+
+// Dynamic real-time alert notifications
+if long_cond
+    alert("UT Bot Alerts & STC: Long entry confirmed! Entry: " + str.tostring(close) + ", SL: " + str.tostring(sl_price) + ", TP: " + str.tostring(tp_price), alert.freq_once_per_bar_close)
+
+if short_cond
+    alert("UT Bot Alerts & STC: Short entry confirmed! Entry: " + str.tostring(close) + ", SL: " + str.tostring(sl_price) + ", TP: " + str.tostring(tp_price), alert.freq_once_per_bar_close)
