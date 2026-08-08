@@ -2,15 +2,17 @@
 indicator("Opening Range Manipulation Strategy", shorttitle="OR Manipulation", overlay=true)
 
 // ==========================================
-// 1. INPUTS & CONFIGURATION
+// 1. CORE STRATEGY SETUP & INPUTS
 // ==========================================
+
+scanning_mode = input.string("9:30 AM EST Opening Range", title="Scanning Mode", options=["9:30 AM EST Opening Range", "Continuous Intraday"], group="Core Strategy Setup", tooltip="Choose whether to mark the 9:30 AM EST Opening 15m Candle or continuously scan every 15m candle throughout the day.")
 
 // Timeframe Settings
 var string TIMEFRAME_15M = "15"
 
 // ATR Settings
 atr_length = input.int(96, title="ATR Length (15m Timeframe)", minval=1, group="ATR Manipulation Settings")
-atr_clearance_buffer = input.float(15.0, title="Unambiguous ATR Clearance Buffer (%)", minval=0.0, step=5.0, group="ATR Manipulation Settings", tooltip="To avoid border-line false signals, the manipulation candle body must exceed 100% ATR + this clearance percentage.")
+flexible_atr_threshold = input.float(85.0, title="Flexible ATR Threshold (%)", minval=50.0, maxval=100.0, step=5.0, group="ATR Manipulation Settings", tooltip="If the candle body is close to the 100% ATR line (exceeds this percentage) AND aligns with a structural FVG, the manipulation candle is treated as valid.")
 
 // Fibonacci Level Selection
 short_entry_sel = input.string("Either Level (38.2% or 61.8%)", title="Short Entry Target Level", options=["61.8%", "38.2%", "Either Level (38.2% or 61.8%)", "Range High"], group="Fibonacci Levels & Execution")
@@ -82,6 +84,11 @@ in_execution_session = only_intraday ? (not na(time(timeframe.period, trading_se
 // values of the previous 15-minute candle, ensuring 100% non-repainting.
 is_new_15m_candle = (not na(sec_time)) and in_execution_session
 
+// Timezone conversions for original 9:30 AM EST logic
+sec_hour = hour(sec_time, session_timezone)
+sec_minute = minute(sec_time, session_timezone)
+is_930_candle_close = (not na(sec_time)) and (sec_hour == 9) and (sec_minute == 30)
+
 // Persistent state variables for the latest Manipulation Range (Impulse)
 var float op_high = na
 var float op_low = na
@@ -103,14 +110,29 @@ var float active_sl_price = na
 var int active_direction = 0 // 1 for Long, -1 for Short, 0 for None
 var int last_trade_bar = 0   // Track bar index of last entry to prevent duplicate entries on the same bar
 
-// Scan every 15-minute candle close
-if is_new_15m_candle
-    body_size = math.abs(sec_close - sec_open)
-    // Strict ATR filter: Body must strictly and unambiguously exceed ATR + clearance buffer
-    atr_threshold = sec_atr * (1.0 + atr_clearance_buffer / 100.0)
+// Evaluation of the 15m candle close
+bool trigger_range_check = false
+if scanning_mode == "9:30 AM EST Opening Range"
+    trigger_range_check := is_930_candle_close
+else
+    trigger_range_check := is_new_15m_candle
 
-    // Check if the 15-minute candle is a Manipulation Candle (Impulse)
-    if body_size > atr_threshold
+if trigger_range_check
+    body_size = math.abs(sec_close - sec_open)
+
+    // Strict ATR limit (100% of ATR)
+    strict_threshold = sec_atr * 1.0
+    // Flexible ATR limit (e.g. 85% of ATR)
+    flexible_threshold = sec_atr * (flexible_atr_threshold / 100.0)
+
+    // Check if 15m FVG exists on the current or preceding candles
+    fvg_exists = (not na(sec_fvg_demand_top)) or (not na(sec_fvg_supply_top))
+
+    // Flexible Manipulation Logic:
+    // A candle qualifies if its body is > 100% of ATR OR if it is "just ticking" / very close (exceeds flexible threshold) AND aligns with structural FVG levels.
+    is_manip = (body_size > strict_threshold) or (body_size > flexible_threshold and fvg_exists)
+
+    if is_manip
         // Capture new range and reset Fibonacci levels
         op_high := sec_high
         op_low := sec_low
@@ -202,7 +224,7 @@ else if short_entry_sel == "Either Level (38.2% or 61.8%)"
 // Verification Rule A: Supply/Demand Zone Overlay
 // Long setups (Buy signals) are only verified if the Fibonacci level overlaps with a Demand Zone.
 // A Demand Zone is defined structurally by:
-// 1) The lower absorption half of the Bearish manipulation candle itself: [op_low, range_midpoint]
+// 1) The lower absorption half of the Bearish manipulation candle itself (aggressive push): [op_low, range_midpoint]
 // 2) OR the latest 15m Fair Value Gap (FVG) Demand zone: [latest_fvg_demand_bottom, latest_fvg_demand_top]
 bool is_long_level_verified = false
 if not na(target_long_entry)
@@ -212,7 +234,7 @@ if not na(target_long_entry)
 
 // Short setups (Sell signals) are only verified if the Fibonacci level overlaps with a Supply Zone.
 // A Supply Zone is defined structurally by:
-// 1) The upper absorption half of the Bullish manipulation candle itself: [range_midpoint, op_high]
+// 1) The upper absorption half of the Bullish manipulation candle itself (aggressive push): [range_midpoint, op_high]
 // 2) OR the latest 15m Fair Value Gap (FVG) Supply zone: [latest_fvg_supply_bottom, latest_fvg_supply_top]
 bool is_short_level_verified = false
 if not na(target_short_entry)
@@ -343,23 +365,27 @@ alertcondition(short_entry_condition, title="Institutional Sell Alert", message=
 // ==========================================
 // 8. SESSION STATUS DASHBOARD TABLE
 // ==========================================
-var table info_table = table.new(position.top_right, 2, 5, border_width = 1, border_color = color.gray)
+var table info_table = table.new(position.top_right, 2, 6, border_width = 1, border_color = color.gray)
 
 if barstate.islast
     // Header Row
     table.cell(info_table, 0, 0, "Metric", bgcolor=color.new(color.gray, 30), text_color=color.white, text_size=size.small)
     table.cell(info_table, 1, 0, "Value", bgcolor=color.new(color.gray, 30), text_color=color.white, text_size=size.small)
 
+    // Scanning Mode Row
+    table.cell(info_table, 0, 1, "Scanning Mode", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, scanning_mode, bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+
     // Range Boundaries Row
-    table.cell(info_table, 0, 1, "Latest Impulse Range", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
-    table.cell(info_table, 1, 1, na(op_high) ? "Scanning..." : str.tostring(op_low, "#.##") + " - " + str.tostring(op_high, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 2, "Latest Impulse Range", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, na(op_high) ? "Scanning..." : str.tostring(op_low, "#.##") + " - " + str.tostring(op_high, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
 
     // Body vs ATR metric
-    table.cell(info_table, 0, 2, "Latest Body/ATR", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
-    table.cell(info_table, 1, 2, na(op_open) ? "Scanning..." : str.tostring(math.abs(op_close - op_open), "#.##") + " / " + str.tostring(op_atr, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 3, "Latest Body/ATR", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 3, na(op_open) ? "Scanning..." : str.tostring(math.abs(op_close - op_open), "#.##") + " / " + str.tostring(op_atr, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
 
     // Manipulation Status Row
-    table.cell(info_table, 0, 3, "Impulse Status", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 4, "Impulse Status", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
     string status_txt = "Scanning..."
     color status_col = color.gray
     if not na(op_high)
@@ -372,10 +398,10 @@ if barstate.islast
         else
             status_txt := "No Impulse"
             status_col := color.blue
-    table.cell(info_table, 1, 3, status_txt, bgcolor=color.new(status_col, 50), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 4, status_txt, bgcolor=color.new(status_col, 50), text_color=color.white, text_size=size.small)
 
     // Bias Setup Row
-    table.cell(info_table, 0, 4, "Current Bias", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 5, "Current Bias", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
     string bias_txt = "Scanning..."
     color bias_col = color.gray
     if not na(op_high)
@@ -388,4 +414,4 @@ if barstate.islast
         else
             bias_txt := "No Setup"
             bias_col := color.gray
-    table.cell(info_table, 1, 4, bias_txt, bgcolor=color.new(bias_col, 50), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 5, bias_txt, bgcolor=color.new(bias_col, 50), text_color=color.white, text_size=size.small)
