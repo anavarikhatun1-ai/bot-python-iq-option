@@ -187,6 +187,9 @@ var float entry_px     = na
 var float sl_px        = na
 var float tp_px        = na
 
+// Stateful ATR defined globally to ensure proper history tracking on every bar
+atr_14 = ta.atr(14)
+
 // Dynamic swing determination
 swing_l = ta.lowest(low, swing_lookback)
 swing_h = ta.highest(high, swing_lookback)
@@ -199,7 +202,7 @@ if trade_position == 0
         sl_px          := swing_l - (sl_padding * syminfo.mintick)
         // Guard against zero-distance or faulty SL
         if sl_px >= close
-            sl_px := close - (ta.atr(14) * 1.5)
+            sl_px := close - (atr_14 * 1.5)
         tp_px          := close + (close - sl_px) * risk_reward
 
         if show_signals
@@ -220,7 +223,7 @@ if trade_position == 0
         sl_px          := swing_h + (sl_padding * syminfo.mintick)
         // Guard against zero-distance or faulty SL
         if sl_px <= close
-            sl_px := close + (ta.atr(14) * 1.5)
+            sl_px := close + (atr_14 * 1.5)
         tp_px          := close - (sl_px - close) * risk_reward
 
         if show_signals
