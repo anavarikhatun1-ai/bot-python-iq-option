@@ -9,16 +9,15 @@ indicator("Opening Range Manipulation Strategy", shorttitle="OR Manipulation", o
 var string TIMEFRAME_15M = "15"
 
 // ATR Settings
-atr_length = input.int(96, title="ATR Length (15m Timeframe)", minval=1, group="ATR manipulation Settings")
-manip_threshold_pct = input.float(100.0, title="Manipulation Threshold (%)", minval=0.0, maxval=500.0, step=5.0, group="ATR manipulation Settings", tooltip="Body must exceed this % of ATR to be considered manipulation")
-require_manip = input.bool(true, title="Enforce Manipulation Filter", group="ATR manipulation Settings", tooltip="If true, 9:30 AM candle must be a manipulation candle to generate setup")
+atr_length = input.int(96, title="ATR Length (15m Timeframe)", minval=1, group="ATR Manipulation Settings")
+manip_threshold_pct = input.float(100.0, title="Manipulation Threshold (%)", minval=0.0, maxval=500.0, step=5.0, group="ATR Manipulation Settings", tooltip="Body must exceed this % of ATR to be considered manipulation")
 
 // Fibonacci Level Selection
-short_entry_sel = input.string("61.8%", title="Short Entry Target Level", options=["61.8%", "38.2%", "Range High"], group="Fibonacci Levels & Execution")
+short_entry_sel = input.string("Either Level (38.2% or 61.8%)", title="Short Entry Target Level", options=["61.8%", "38.2%", "Either Level (38.2% or 61.8%)", "Range High"], group="Fibonacci Levels & Execution")
 short_tp_sel = input.string("38.2%", title="Short Take Profit Target Level", options=["38.2%", "61.8%", "Range Low"], group="Fibonacci Levels & Execution")
 
-long_entry_sel = input.string("38.2%", title="Long Entry Target Level", options=["38.2%", "61.8%", "Range Low"], group="Fibonacci Levels & Execution")
-long_tp_sel = input.string("61.8%", title="Long Take Profit Target Level", options=["38.2%", "61.8%", "Range High"], group="Fibonacci Levels & Execution")
+long_entry_sel = input.string("Either Level (38.2% or 61.8%)", title="Long Entry Target Level", options=["38.2%", "61.8%", "Either Level (38.2% or 61.8%)", "Range Low"], group="Fibonacci Levels & Execution")
+long_tp_sel = input.string("61.8%", title="Long Take Profit Target Level", options=["61.8%", "38.2%", "Range High"], group="Fibonacci Levels & Execution")
 
 // Risk Management
 sl_mode = input.string("Risk-to-Reward", title="Stop Loss Mode", options=["Risk-to-Reward", "Opening Range High/Low (S/D)", "Manual Ticks"], group="Risk Management")
@@ -27,7 +26,8 @@ manual_sl_ticks = input.int(100, title="Manual SL Ticks/Pips Offset", minval=1, 
 
 // Session Settings
 session_timezone = input.string("America/New_York", title="Session Timezone", group="Session Settings")
-trading_session_input = input.string("0945-1600:23456", title="Execution Session Window", group="Session Settings", tooltip="Trading execution window. Starts at 9:45 AM Eastern (after 15m candle closes) and ends at 4:00 PM Eastern.")
+only_intraday = input.bool(false, title="Restrict Execution to Intraday Session Window", group="Session Settings", tooltip="If enabled, scanning and trades will only occur within the Execution Session Window below.")
+trading_session_input = input.string("0930-1600:23456", title="Execution Session Window", group="Session Settings", tooltip="Used if Intraday Restriction is enabled.")
 
 // ==========================================
 // 2. MULTI-TIMEFRAME DATA FETCHING
@@ -44,17 +44,18 @@ trading_session_input = input.string("0945-1600:23456", title="Execution Session
      )
 
 // ==========================================
-// 3. TIMEZONE & RANGE COMPUTATIONS
+// 3. CONTINUOUS SCANNING & RANGE COMPUTATIONS
 // ==========================================
 
-// Check if a 15-minute bar just closed and evaluate its timestamp in New York Eastern Time.
-sec_hour = hour(sec_time, session_timezone)
-sec_minute = minute(sec_time, session_timezone)
+// Check if we are currently inside the active session/scanning window
+in_execution_session = only_intraday ? (not na(time(timeframe.period, trading_session_input, session_timezone))) : true
 
-// 9:30 AM EST candle corresponds to the 15-minute candle opening at 9:30:00 and closing at 9:45:00
-is_930_candle_close = (not na(sec_time)) and (sec_hour == 9) and (sec_minute == 30)
+// A non-na sec_time with gaps_on indicates that a new 15-minute candle has just opened.
+// At this exact point on the 1-minute chart, the values returned are the fully closed/finalized
+// high, low, open, close and ATR of the previous 15-minute candle, ensuring 100% non-repainting.
+is_new_15m_candle = (not na(sec_time)) and in_execution_session
 
-// Persistent state variables for the Opening Range setup
+// Persistent state variables for the latest Manipulation Range (Impulse)
 var float op_high = na
 var float op_low = na
 var float op_open = na
@@ -64,90 +65,119 @@ var bool op_is_manip = false
 var bool op_is_bullish = false
 var bool op_is_bearish = false
 
-// Reset and capture the Opening Range data on the 1-minute execution chart once the 15-minute candle closes (at 9:45 AM EST)
-if is_930_candle_close
-    op_high := sec_high
-    op_low := sec_low
-    op_open := sec_open
-    op_close := sec_close
-    op_atr := sec_atr
+// State tracking for trade execution (allowing multiple trades per day/range)
+var float active_entry_price = na
+var float active_tp_price = na
+var float active_sl_price = na
+var int active_direction = 0 // 1 for Long, -1 for Short, 0 for None
+var int last_trade_bar = 0   // Track bar index of last entry to prevent duplicate entries on the same bar
 
-    // Calculate candle body size on 15m timeframe
+// Scan every 15-minute candle close
+if is_new_15m_candle
     body_size = math.abs(sec_close - sec_open)
     atr_threshold = sec_atr * (manip_threshold_pct / 100.0)
 
-    // Define manipulation
-    op_is_manip := body_size > atr_threshold
-    op_is_bullish := op_is_manip and (sec_close > sec_open)
-    op_is_bearish := op_is_manip and (sec_close < sec_open)
+    // Check if the 15-minute candle is a Manipulation Candle (Impulse)
+    if body_size > atr_threshold
+        // Capture new range and reset Fibonacci levels
+        op_high := sec_high
+        op_low := sec_low
+        op_open := sec_open
+        op_close := sec_close
+        op_atr := sec_atr
+        op_is_manip := true
+        op_is_bullish := sec_close > sec_open
+        op_is_bearish := sec_close < sec_open
 
-// If manipulation is not strictly required, allow setup based on any 9:30 AM candle direction
-bool has_bullish_bias = require_manip ? op_is_bullish : (not na(op_close) and op_close > op_open)
-bool has_bearish_bias = require_manip ? op_is_bearish : (not na(op_close) and op_close < op_open)
+        // Reset current active trade state to look for fresh entries on the new range immediately
+        active_direction := 0
+        active_entry_price := na
+        active_tp_price := na
+        active_sl_price := na
 
-// Fibonacci level calculations based on the confirmed Opening Range
+// Bias state based on the latest captured manipulation candle
+bool has_bullish_bias = op_is_manip and op_is_bullish
+bool has_bearish_bias = op_is_manip and op_is_bearish
+
+// Fibonacci calculations for the latest range
 range_size = op_high - op_low
 fib_382 = op_low + (range_size * 0.382)
 fib_618 = op_low + (range_size * 0.618)
 
 // ==========================================
-// 4. TRADE EXECUTION TARGETS
+// 4. RETRACEMENT TOUCH DETECTION
 // ==========================================
 
-// Determine dynamic levels based on user choices
-short_entry_val = short_entry_sel == "61.8%" ? fib_618 : (short_entry_sel == "38.2%" ? fib_382 : op_high)
-short_tp_val = short_tp_sel == "38.2%" ? fib_382 : (short_tp_sel == "61.8%" ? fib_618 : op_low)
+// Touch/cross checks for entry targets
+bool long_touch_382 = (high >= fib_382 and low <= fib_382)
+bool long_touch_618 = (high >= fib_618 and low <= fib_618)
+bool long_touch_low = (high >= op_low and low <= op_low)
 
-long_entry_val = long_entry_sel == "38.2%" ? fib_382 : (long_entry_sel == "61.8%" ? fib_618 : op_low)
-long_tp_val = long_tp_sel == "61.8%" ? fib_618 : (long_tp_sel == "38.2%" ? fib_382 : op_high)
+bool short_touch_382 = (high >= fib_382 and low <= fib_382)
+bool short_touch_618 = (high >= fib_618 and low <= fib_618)
+bool short_touch_high = (high >= op_high and low <= op_high)
+
+// Determine target entry price and trigger flags dynamically
+float target_long_entry = na
+bool long_triggered = false
+
+if long_entry_sel == "38.2%" and long_touch_382
+    target_long_entry := fib_382
+    long_triggered := true
+else if long_entry_sel == "61.8%" and long_touch_618
+    target_long_entry := fib_618
+    long_triggered := true
+else if long_entry_sel == "Range Low" and long_touch_low
+    target_long_entry := op_low
+    long_triggered := true
+else if long_entry_sel == "Either Level (38.2% or 61.8%)"
+    if long_touch_382
+        target_long_entry := fib_382
+        long_triggered := true
+    else if long_touch_618
+        target_long_entry := fib_618
+        long_triggered := true
+
+float target_short_entry = na
+bool short_triggered = false
+
+if short_entry_sel == "61.8%" and short_touch_618
+    target_short_entry := fib_618
+    short_triggered := true
+else if short_entry_sel == "38.2%" and short_touch_382
+    target_short_entry := fib_382
+    short_triggered := true
+else if short_entry_sel == "Range High" and short_touch_high
+    target_short_entry := op_high
+    short_triggered := true
+else if short_entry_sel == "Either Level (38.2% or 61.8%)"
+    if short_touch_618
+        target_short_entry := fib_618
+        short_triggered := true
+    else if short_touch_382
+        target_short_entry := fib_382
+        short_triggered := true
 
 // ==========================================
-// 5. SESSION & STATE TRACKING
+// 5. SIGNAL GENERATION LOGIC
 // ==========================================
 
-// Check if we are inside the active trading session window (starts at 9:45 AM EST, closes at 4:00 PM EST)
-in_execution_session = not na(time(timeframe.period, trading_session_input, session_timezone))
+// Long Entry Condition (Bearish Impulse):
+long_entry_condition = has_bearish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and long_triggered
 
-// State tracking for trade execution (allowing multiple trades per session)
-var float active_entry_price = na
-var float active_tp_price = na
-var float active_sl_price = na
-var int active_direction = 0 // 1 for Long, -1 for Short, 0 for None
-var int last_trade_bar = 0   // Track bar index of last entry to prevent multiple entries on the same bar
+// Short Entry Condition (Bullish Impulse):
+short_entry_condition = has_bullish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and short_triggered
 
-// Reset trading state daily at 9:45 AM Eastern
-if is_930_candle_close
-    active_direction := 0
-    active_entry_price := na
-    active_tp_price := na
-    active_sl_price := na
-    last_trade_bar := 0
+// Dynamic TP calculation based on selections
+f_get_tp(is_long, entry_p) =>
+    float calculated_tp = na
+    if is_long
+        calculated_tp := long_tp_sel == "61.8%" ? fib_618 : (long_tp_sel == "38.2%" ? fib_382 : op_high)
+    else
+        calculated_tp := short_tp_sel == "38.2%" ? fib_382 : (short_tp_sel == "61.8%" ? fib_618 : op_low)
+    calculated_tp
 
-// ==========================================
-// 6. SIGNAL GENERATION LOGIC
-// ==========================================
-
-// To ensure labels appear for every valid retracement entry within a manipulation range,
-// we allow a new entry whenever there is no active trade in progress (active_direction == 0)
-// and the current candle touches or crosses the entry level.
-
-// Long Entry Conditions:
-// 1. Bearish manipulation (creates bullish order flow retracement bias)
-// 2. Execution session window is open
-// 3. No active trade is currently in progress
-// 4. Current bar is a new bar since last entry to avoid double entry on the same bar
-// 5. Price retraces/touches the entry target (high >= long_entry_val and low <= long_entry_val)
-long_entry_condition = has_bearish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and (high >= long_entry_val and low <= long_entry_val)
-
-// Short Entry Conditions:
-// 1. Bullish manipulation (creates bearish order flow retracement bias)
-// 2. Execution session window is open
-// 3. No active trade is currently in progress
-// 4. Current bar is a new bar since last entry to avoid double entry on the same bar
-// 5. Price retraces/touches the entry target (high >= short_entry_val and low <= short_entry_val)
-short_entry_condition = has_bullish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and (high >= short_entry_val and low <= short_entry_val)
-
-// Calculate dynamic Stop Loss based on selected mode
+// Dynamic SL calculation based on selections
 f_calculate_sl(is_long, entry_p, tp_p) =>
     float calculated_sl = na
     if sl_mode == "Risk-to-Reward"
@@ -164,25 +194,25 @@ f_calculate_sl(is_long, entry_p, tp_p) =>
 if long_entry_condition
     active_direction := 1
     last_trade_bar := bar_index
-    active_entry_price := long_entry_val
-    active_tp_price := long_tp_val
-    active_sl_price := f_calculate_sl(true, long_entry_val, long_tp_val)
+    active_entry_price := target_long_entry
+    active_tp_price := f_get_tp(true, target_long_entry)
+    active_sl_price := f_calculate_sl(true, target_long_entry, active_tp_price)
 
 // Execute Short Trade State
 if short_entry_condition
     active_direction := -1
     last_trade_bar := bar_index
-    active_entry_price := short_entry_val
-    active_tp_price := short_tp_val
-    active_sl_price := f_calculate_sl(false, short_entry_val, short_tp_val)
+    active_entry_price := target_short_entry
+    active_tp_price := f_get_tp(false, target_short_entry)
+    active_sl_price := f_calculate_sl(false, target_short_entry, active_tp_price)
 
-// Manage Active Trade Exits & Resets (TP, SL or session close)
+// Manage Active Trade Exits & Resets (TP, SL or session close if intraday restriction is on)
 if active_direction == 1 // Active Long
     if high >= active_tp_price // Take Profit Hit
         active_direction := 0
     else if low <= active_sl_price // Stop Loss Hit
         active_direction := 0
-    else if not in_execution_session // End of Trading Window
+    else if only_intraday and (not in_execution_session) // End of Trading Window
         active_direction := 0
 
 if active_direction == -1 // Active Short
@@ -190,20 +220,20 @@ if active_direction == -1 // Active Short
         active_direction := 0
     else if high >= active_sl_price // Stop Loss Hit
         active_direction := 0
-    else if not in_execution_session // End of Trading Window
+    else if only_intraday and (not in_execution_session) // End of Trading Window
         active_direction := 0
 
 // ==========================================
-// 7. CHART PLOTS, LABELS & ALERTS
+// 6. CHART PLOTS, LABELS & ALERTS
 // ==========================================
 
-// Draw Opening Range Levels
-plot(in_execution_session ? op_high : na, title="Opening Range High", color=color.new(color.blue, 30), linewidth=2, style=plot.style_linebr)
-plot(in_execution_session ? op_low : na, title="Opening Range Low", color=color.new(color.blue, 30), linewidth=2, style=plot.style_linebr)
+// Draw Impulse Range Levels
+plot(in_execution_session ? op_high : na, title="Impulse High", color=color.new(color.red, 30), linewidth=2, style=plot.style_linebr)
+plot(in_execution_session ? op_low : na, title="Impulse Low", color=color.new(color.green, 30), linewidth=2, style=plot.style_linebr)
 
 // Draw Fibonacci Levels within the session
-plot(in_execution_session ? fib_382 : na, title="OR Fib 38.2%", color=color.new(color.orange, 50), linewidth=1, style=plot.style_linebr)
-plot(in_execution_session ? fib_618 : na, title="OR Fib 61.8%", color=color.new(color.orange, 50), linewidth=1, style=plot.style_linebr)
+plot(in_execution_session ? fib_382 : na, title="Impulse Fib 38.2%", color=color.new(color.orange, 50), linewidth=1, style=plot.style_linebr)
+plot(in_execution_session ? fib_618 : na, title="Impulse Fib 61.8%", color=color.new(color.orange, 50), linewidth=1, style=plot.style_linebr)
 
 // Plot Active Trade Levels
 plot(active_direction != 0 ? active_entry_price : na, title="Active Entry Price", color=color.blue, style=plot.style_linebr, linewidth=1)
@@ -219,7 +249,7 @@ alertcondition(long_entry_condition, title="Institutional Buy Alert", message="O
 alertcondition(short_entry_condition, title="Institutional Sell Alert", message="Opening Range Manipulation: Institutional SELL Entry Triggered!")
 
 // ==========================================
-// 8. SESSION STATUS DASHBOARD TABLE
+// 7. SESSION STATUS DASHBOARD TABLE
 // ==========================================
 var table info_table = table.new(position.top_right, 2, 5, border_width = 1, border_color = color.gray)
 
@@ -229,39 +259,39 @@ if barstate.islast
     table.cell(info_table, 1, 0, "Value", bgcolor=color.new(color.gray, 30), text_color=color.white, text_size=size.small)
 
     // Range Boundaries Row
-    table.cell(info_table, 0, 1, "Opening Range", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
-    table.cell(info_table, 1, 1, na(op_high) ? "Pending" : str.tostring(op_low, "#.##") + " - " + str.tostring(op_high, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 1, "Latest Impulse Range", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, na(op_high) ? "Scanning..." : str.tostring(op_low, "#.##") + " - " + str.tostring(op_high, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
 
     // Body vs ATR metric
-    table.cell(info_table, 0, 2, "9:30 AM Body/ATR", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
-    table.cell(info_table, 1, 2, na(op_open) ? "Pending" : str.tostring(math.abs(op_close - op_open), "#.##") + " / " + str.tostring(op_atr, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 0, 2, "Latest Body/ATR", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, na(op_open) ? "Scanning..." : str.tostring(math.abs(op_close - op_open), "#.##") + " / " + str.tostring(op_atr, "#.##"), bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
 
     // Manipulation Status Row
-    table.cell(info_table, 0, 3, "Manipulation Status", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
-    string status_txt = "Pending"
+    table.cell(info_table, 0, 3, "Impulse Status", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
+    string status_txt = "Scanning..."
     color status_col = color.gray
     if not na(op_high)
         if op_is_bullish
-            status_txt := "Bullish Manipulation"
+            status_txt := "Bullish Impulse"
             status_col := color.red
         else if op_is_bearish
-            status_txt := "Bearish Manipulation"
+            status_txt := "Bearish Impulse"
             status_col := color.green
         else
-            status_txt := "No Manipulation"
+            status_txt := "No Impulse"
             status_col := color.blue
     table.cell(info_table, 1, 3, status_txt, bgcolor=color.new(status_col, 50), text_color=color.white, text_size=size.small)
 
     // Bias Setup Row
     table.cell(info_table, 0, 4, "Current Bias", bgcolor=color.new(color.gray, 80), text_color=color.white, text_size=size.small)
-    string bias_txt = "Pending"
+    string bias_txt = "Scanning..."
     color bias_col = color.gray
     if not na(op_high)
         if has_bullish_bias
-            bias_txt := "Short Setup at " + str.tostring(short_entry_val, "#.##")
+            bias_txt := "Short Setup at " + (short_entry_sel == "Either Level (38.2% or 61.8%)" ? "Fib Levels" : short_entry_sel)
             bias_col := color.orange
         else if has_bearish_bias
-            bias_txt := "Long Setup at " + str.tostring(long_entry_val, "#.##")
+            bias_txt := "Long Setup at " + (long_entry_sel == "Either Level (38.2% or 61.8%)" ? "Fib Levels" : long_entry_sel)
             bias_col := color.teal
         else
             bias_txt := "No Setup"
