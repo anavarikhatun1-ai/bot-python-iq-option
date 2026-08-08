@@ -108,38 +108,44 @@ long_tp_val = long_tp_sel == "61.8%" ? fib_618 : (long_tp_sel == "38.2%" ? fib_3
 // Check if we are inside the active trading session window (starts at 9:45 AM EST, closes at 4:00 PM EST)
 in_execution_session = not na(time(timeframe.period, trading_session_input, session_timezone))
 
-// State tracking for trade execution (ensuring only 1 trade is processed per session)
-var bool traded_today = false
+// State tracking for trade execution (allowing multiple trades per session)
 var float active_entry_price = na
 var float active_tp_price = na
 var float active_sl_price = na
 var int active_direction = 0 // 1 for Long, -1 for Short, 0 for None
+var int last_trade_bar = 0   // Track bar index of last entry to prevent multiple entries on the same bar
 
 // Reset trading state daily at 9:45 AM Eastern
 if is_930_candle_close
-    traded_today := false
     active_direction := 0
     active_entry_price := na
     active_tp_price := na
     active_sl_price := na
+    last_trade_bar := 0
 
 // ==========================================
 // 6. SIGNAL GENERATION LOGIC
 // ==========================================
 
+// To ensure labels appear for every valid retracement entry within a manipulation range,
+// we allow a new entry whenever there is no active trade in progress (active_direction == 0)
+// and the current candle touches or crosses the entry level.
+
 // Long Entry Conditions:
 // 1. Bearish manipulation (creates bullish order flow retracement bias)
 // 2. Execution session window is open
-// 3. No trades executed yet today
-// 4. Low of current candle retraces to or below the entry target
-long_entry_condition = has_bearish_bias and in_execution_session and (not traded_today) and (low <= long_entry_val)
+// 3. No active trade is currently in progress
+// 4. Current bar is a new bar since last entry to avoid double entry on the same bar
+// 5. Price retraces/touches the entry target (high >= long_entry_val and low <= long_entry_val)
+long_entry_condition = has_bearish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and (high >= long_entry_val and low <= long_entry_val)
 
 // Short Entry Conditions:
 // 1. Bullish manipulation (creates bearish order flow retracement bias)
 // 2. Execution session window is open
-// 3. No trades executed yet today
-// 4. High of current candle retraces to or above the entry target
-short_entry_condition = has_bullish_bias and in_execution_session and (not traded_today) and (high >= short_entry_val)
+// 3. No active trade is currently in progress
+// 4. Current bar is a new bar since last entry to avoid double entry on the same bar
+// 5. Price retraces/touches the entry target (high >= short_entry_val and low <= short_entry_val)
+short_entry_condition = has_bullish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and (high >= short_entry_val and low <= short_entry_val)
 
 // Calculate dynamic Stop Loss based on selected mode
 f_calculate_sl(is_long, entry_p, tp_p) =>
@@ -156,16 +162,16 @@ f_calculate_sl(is_long, entry_p, tp_p) =>
 
 // Execute Long Trade State
 if long_entry_condition
-    traded_today := true
     active_direction := 1
+    last_trade_bar := bar_index
     active_entry_price := long_entry_val
     active_tp_price := long_tp_val
     active_sl_price := f_calculate_sl(true, long_entry_val, long_tp_val)
 
 // Execute Short Trade State
 if short_entry_condition
-    traded_today := true
     active_direction := -1
+    last_trade_bar := bar_index
     active_entry_price := short_entry_val
     active_tp_price := short_tp_val
     active_sl_price := f_calculate_sl(false, short_entry_val, short_tp_val)
