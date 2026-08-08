@@ -35,9 +35,9 @@ trading_session_input = input.string("0930-1600:23456", title="Execution Session
 // 2. MULTI-TIMEFRAME DATA FETCHING
 // ==========================================
 
-// Fetch 15-minute high, low, open, close, time, ATR(96) and Fair Value Gap (FVG) boundaries.
+// Fetch 15-minute high, low, open, close, time, ATR(96), Fair Value Gap (FVG) boundaries, and Order Block (OB) boundaries.
 // We use lookahead = barmerge.lookahead_off and gaps = barmerge.gaps_on to ensure 100% non-repainting.
-[sec_high, sec_low, sec_open, sec_close, sec_atr, sec_time, sec_fvg_demand_top, sec_fvg_demand_bottom, sec_fvg_supply_top, sec_fvg_supply_bottom] = request.security(
+[sec_high, sec_low, sec_open, sec_close, sec_atr, sec_time, sec_fvg_demand_top, sec_fvg_demand_bottom, sec_fvg_supply_top, sec_fvg_supply_bottom, sec_prev_high, sec_prev_low] = request.security(
      syminfo.tickerid,
      TIMEFRAME_15M,
      [
@@ -52,7 +52,10 @@ trading_session_input = input.string("0930-1600:23456", title="Execution Session
       low[0] > high[2] ? high[2] : na,
       // Bearish FVG Supply Zone: High boundary is low[2], Low boundary is high[0]
       high[0] < low[2] ? low[2] : na,
-      high[0] < low[2] ? high[0] : na
+      high[0] < low[2] ? high[0] : na,
+      // Order Block (OB) is defined as previous candle
+      high[1],
+      low[1]
      ],
      gaps = barmerge.gaps_on,
      lookahead = barmerge.lookahead_off
@@ -71,6 +74,14 @@ if not na(sec_fvg_demand_top)
 if not na(sec_fvg_supply_top)
     latest_fvg_supply_top := sec_fvg_supply_top
     latest_fvg_supply_bottom := sec_fvg_supply_bottom
+
+// Persistent OB tracking variables on the 1-minute execution chart
+var float latest_ob_high = na
+var float latest_ob_low = na
+
+if not na(sec_prev_high)
+    latest_ob_high := sec_prev_high
+    latest_ob_low := sec_prev_low
 
 // ==========================================
 // 3. CONTINUOUS SCANNING & RANGE COMPUTATIONS
@@ -108,7 +119,25 @@ var float active_entry_price = na
 var float active_tp_price = na
 var float active_sl_price = na
 var int active_direction = 0 // 1 for Long, -1 for Short, 0 for None
-var int last_trade_bar = 0   // Track bar index of last entry to prevent duplicate entries on the same bar
+var int last_trade_bar = 0   // Track bar index of last entry to prevent multiple entries on the same bar
+
+// Reset all persistent state variables at the start of a new trading day (using session timezone)
+if ta.change(time("D", session_timezone))
+    op_high := na
+    op_low := na
+    op_open := na
+    op_close := na
+    op_atr := na
+    op_is_manip := false
+    op_is_bullish := false
+    op_is_bearish := false
+    buy_count_this_range := 0
+    sell_count_this_range := 0
+    active_direction := 0
+    active_entry_price := na
+    active_tp_price := na
+    active_sl_price := na
+    last_trade_bar := 0
 
 // Evaluation of the 15m candle close
 bool trigger_range_check = false
@@ -162,6 +191,19 @@ range_size = op_high - op_low
 fib_382 = op_low + (range_size * 0.382)
 fib_618 = op_low + (range_size * 0.618)
 range_midpoint = op_low + (range_size * 0.5)
+
+// Session-running range boundaries for Range Extreme Filter
+var float session_highest = na
+var float session_lowest = na
+
+if is_930_candle_close or ta.change(time("D"))
+    session_highest := high
+    session_lowest := low
+else
+    session_highest := not na(session_highest) ? math.max(session_highest, high) : high
+    session_lowest := not na(session_lowest) ? math.min(session_lowest, low) : low
+
+session_midpoint = (session_highest + session_lowest) / 2.0
 
 // ==========================================
 // 4. RETRACEMENT TOUCH DETECTION
@@ -226,28 +268,32 @@ else if short_entry_sel == "Either Level (38.2% or 61.8%)"
 // A Demand Zone is defined structurally by:
 // 1) The lower absorption half of the Bearish manipulation candle itself (aggressive push): [op_low, range_midpoint]
 // 2) OR the latest 15m Fair Value Gap (FVG) Demand zone: [latest_fvg_demand_bottom, latest_fvg_demand_top]
+// 3) OR the latest 15m Order Block (OB) zone: [latest_ob_low, latest_ob_high]
 bool is_long_level_verified = false
 if not na(target_long_entry)
     in_manip_demand = (target_long_entry >= op_low and target_long_entry <= range_midpoint)
     in_fvg_demand = (not na(latest_fvg_demand_top) and target_long_entry >= latest_fvg_demand_bottom and target_long_entry <= latest_fvg_demand_top)
-    is_long_level_verified := in_manip_demand or in_fvg_demand
+    in_ob_demand = (not na(latest_ob_low) and target_long_entry >= latest_ob_low and target_long_entry <= latest_ob_high)
+    is_long_level_verified := in_manip_demand or in_fvg_demand or in_ob_demand
 
 // Short setups (Sell signals) are only verified if the Fibonacci level overlaps with a Supply Zone.
 // A Supply Zone is defined structurally by:
 // 1) The upper absorption half of the Bullish manipulation candle itself (aggressive push): [range_midpoint, op_high]
 // 2) OR the latest 15m Fair Value Gap (FVG) Supply zone: [latest_fvg_supply_bottom, latest_fvg_supply_top]
+// 3) OR the latest 15m Order Block (OB) zone: [latest_ob_low, latest_ob_high]
 bool is_short_level_verified = false
 if not na(target_short_entry)
     in_manip_supply = (target_short_entry >= range_midpoint and target_short_entry <= op_high)
     in_fvg_supply = (not na(latest_fvg_supply_top) and target_short_entry >= latest_fvg_supply_bottom and target_short_entry <= latest_fvg_supply_top)
-    is_short_level_verified := in_manip_supply or in_fvg_supply
+    in_ob_supply = (not na(latest_ob_low) and target_short_entry >= latest_ob_low and target_short_entry <= latest_ob_high)
+    is_short_level_verified := in_manip_supply or in_fvg_supply or in_ob_supply
 
 // Verification Rule B: Range Extreme Filter
-// Markets range 70-80% of the time. To prevent choppy false entries:
-// - Long/Buy signals must strictly execute at the bottom of the range (low <= range_midpoint)
-// - Short/Sell signals must strictly execute at the top of the range (high >= range_midpoint)
-bool is_at_range_low_extreme = (low <= range_midpoint)
-bool is_at_range_high_extreme = (high >= range_midpoint)
+// Markets range 70-80% of the time. To prevent choppy false entries, we ensure:
+// - Long/Buy signals must execute in the bottom (discount) portion of the session range.
+// - Short/Sell signals must execute in the top (premium) portion of the session range.
+bool is_at_range_low_extreme = (target_long_entry <= session_midpoint)
+bool is_at_range_high_extreme = (target_short_entry >= session_midpoint)
 
 // Verification Rule C: Cooldown Control
 // Limit signals to exactly 1 Buy and 1 Sell signal per identified manipulation range.
