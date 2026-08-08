@@ -272,7 +272,13 @@ if show_dashboard and barstate.islast
     table.cell(info_table, 2, 4, "Avg Entry: " + str.tostring(strategy.position_avg_price, "#.##"), bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
 
     // Row 5: Stats (Net Profit / Win Rate)
-    win_rate = strategy.closed_trades > 0 ? (strategy.winning_trades / strategy.closed_trades) * 100.0 : 0.0
+    int winning_trades_count = 0
+    if strategy.closedtrades > 0
+        for i = 0 to strategy.closedtrades - 1
+            if strategy.closedtrades.profit(i) > 0
+                winning_trades_count := winning_trades_count + 1
+
+    win_rate = strategy.closedtrades > 0 ? (winning_trades_count / strategy.closedtrades) * 100.0 : 0.0
     table.cell(info_table, 0, 5, "Net Profit / Win Rate", bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
     table.cell(info_table, 1, 5, str.tostring(strategy.netprofit, "#.##") + " " + syminfo.currency, bgcolor=bg_color_input, text_color=strategy.netprofit >= 0 ? color.green : color.red, text_size=size.small)
     table.cell(info_table, 2, 5, "WR: " + str.tostring(win_rate, "#.#") + "%", bgcolor=bg_color_input, text_color=win_rate >= 50.0 ? color.green : color.orange, text_size=size.small)
