@@ -10,7 +10,7 @@ var string TIMEFRAME_15M = "15"
 
 // ATR Settings
 atr_length = input.int(96, title="ATR Length (15m Timeframe)", minval=1, group="ATR Manipulation Settings")
-manip_threshold_pct = input.float(100.0, title="Manipulation Threshold (%)", minval=0.0, maxval=500.0, step=5.0, group="ATR Manipulation Settings", tooltip="Body must exceed this % of ATR to be considered manipulation")
+atr_clearance_buffer = input.float(15.0, title="Unambiguous ATR Clearance Buffer (%)", minval=0.0, step=5.0, group="ATR Manipulation Settings", tooltip="To avoid border-line false signals, the manipulation candle body must exceed 100% ATR + this clearance percentage.")
 
 // Fibonacci Level Selection
 short_entry_sel = input.string("Either Level (38.2% or 61.8%)", title="Short Entry Target Level", options=["61.8%", "38.2%", "Either Level (38.2% or 61.8%)", "Range High"], group="Fibonacci Levels & Execution")
@@ -33,15 +33,42 @@ trading_session_input = input.string("0930-1600:23456", title="Execution Session
 // 2. MULTI-TIMEFRAME DATA FETCHING
 // ==========================================
 
-// Fetch 15-minute high, low, open, close, time, and ATR(96) to prevent repainting.
-// We use lookahead = barmerge.lookahead_off and gaps = barmerge.gaps_on.
-[sec_high, sec_low, sec_open, sec_close, sec_atr, sec_time] = request.security(
+// Fetch 15-minute high, low, open, close, time, ATR(96) and Fair Value Gap (FVG) boundaries.
+// We use lookahead = barmerge.lookahead_off and gaps = barmerge.gaps_on to ensure 100% non-repainting.
+[sec_high, sec_low, sec_open, sec_close, sec_atr, sec_time, sec_fvg_demand_top, sec_fvg_demand_bottom, sec_fvg_supply_top, sec_fvg_supply_bottom] = request.security(
      syminfo.tickerid,
      TIMEFRAME_15M,
-     [high, low, open, close, ta.atr(atr_length), time],
+     [
+      high,
+      low,
+      open,
+      close,
+      ta.atr(atr_length),
+      time,
+      // Bullish FVG Demand Zone: High boundary is low[0], Low boundary is high[2]
+      low[0] > high[2] ? low[0] : na,
+      low[0] > high[2] ? high[2] : na,
+      // Bearish FVG Supply Zone: High boundary is low[2], Low boundary is high[0]
+      high[0] < low[2] ? low[2] : na,
+      high[0] < low[2] ? high[0] : na
+     ],
      gaps = barmerge.gaps_on,
      lookahead = barmerge.lookahead_off
      )
+
+// Persistent FVG tracking variables on the 1-minute execution chart
+var float latest_fvg_demand_top = na
+var float latest_fvg_demand_bottom = na
+var float latest_fvg_supply_top = na
+var float latest_fvg_supply_bottom = na
+
+if not na(sec_fvg_demand_top)
+    latest_fvg_demand_top := sec_fvg_demand_top
+    latest_fvg_demand_bottom := sec_fvg_demand_bottom
+
+if not na(sec_fvg_supply_top)
+    latest_fvg_supply_top := sec_fvg_supply_top
+    latest_fvg_supply_bottom := sec_fvg_supply_bottom
 
 // ==========================================
 // 3. CONTINUOUS SCANNING & RANGE COMPUTATIONS
@@ -52,7 +79,7 @@ in_execution_session = only_intraday ? (not na(time(timeframe.period, trading_se
 
 // A non-na sec_time with gaps_on indicates that a new 15-minute candle has just opened.
 // At this exact point on the 1-minute chart, the values returned are the fully closed/finalized
-// high, low, open, close and ATR of the previous 15-minute candle, ensuring 100% non-repainting.
+// values of the previous 15-minute candle, ensuring 100% non-repainting.
 is_new_15m_candle = (not na(sec_time)) and in_execution_session
 
 // Persistent state variables for the latest Manipulation Range (Impulse)
@@ -65,7 +92,11 @@ var bool op_is_manip = false
 var bool op_is_bullish = false
 var bool op_is_bearish = false
 
-// State tracking for trade execution (allowing multiple trades per day/range)
+// Cooldown state tracking (allowing exactly 1 Buy and 1 Sell signal per identified manipulation range)
+var int buy_count_this_range = 0
+var int sell_count_this_range = 0
+
+// State tracking for active trade execution
 var float active_entry_price = na
 var float active_tp_price = na
 var float active_sl_price = na
@@ -75,7 +106,8 @@ var int last_trade_bar = 0   // Track bar index of last entry to prevent duplica
 // Scan every 15-minute candle close
 if is_new_15m_candle
     body_size = math.abs(sec_close - sec_open)
-    atr_threshold = sec_atr * (manip_threshold_pct / 100.0)
+    // Strict ATR filter: Body must strictly and unambiguously exceed ATR + clearance buffer
+    atr_threshold = sec_atr * (1.0 + atr_clearance_buffer / 100.0)
 
     // Check if the 15-minute candle is a Manipulation Candle (Impulse)
     if body_size > atr_threshold
@@ -88,6 +120,10 @@ if is_new_15m_candle
         op_is_manip := true
         op_is_bullish := sec_close > sec_open
         op_is_bearish := sec_close < sec_open
+
+        // Reset Cooldown counts for the new manipulation range
+        buy_count_this_range := 0
+        sell_count_this_range := 0
 
         // Reset current active trade state to look for fresh entries on the new range immediately
         active_direction := 0
@@ -103,6 +139,7 @@ bool has_bearish_bias = op_is_manip and op_is_bearish
 range_size = op_high - op_low
 fib_382 = op_low + (range_size * 0.382)
 fib_618 = op_low + (range_size * 0.618)
+range_midpoint = op_low + (range_size * 0.5)
 
 // ==========================================
 // 4. RETRACEMENT TOUCH DETECTION
@@ -159,14 +196,67 @@ else if short_entry_sel == "Either Level (38.2% or 61.8%)"
         short_triggered := true
 
 // ==========================================
-// 5. SIGNAL GENERATION LOGIC
+// 5. STRICT VERIFICATION RULES
+// ==========================================
+
+// Verification Rule A: Supply/Demand Zone Overlay
+// Long setups (Buy signals) are only verified if the Fibonacci level overlaps with a Demand Zone.
+// A Demand Zone is defined structurally by:
+// 1) The lower absorption half of the Bearish manipulation candle itself: [op_low, range_midpoint]
+// 2) OR the latest 15m Fair Value Gap (FVG) Demand zone: [latest_fvg_demand_bottom, latest_fvg_demand_top]
+bool is_long_level_verified = false
+if not na(target_long_entry)
+    in_manip_demand = (target_long_entry >= op_low and target_long_entry <= range_midpoint)
+    in_fvg_demand = (not na(latest_fvg_demand_top) and target_long_entry >= latest_fvg_demand_bottom and target_long_entry <= latest_fvg_demand_top)
+    is_long_level_verified := in_manip_demand or in_fvg_demand
+
+// Short setups (Sell signals) are only verified if the Fibonacci level overlaps with a Supply Zone.
+// A Supply Zone is defined structurally by:
+// 1) The upper absorption half of the Bullish manipulation candle itself: [range_midpoint, op_high]
+// 2) OR the latest 15m Fair Value Gap (FVG) Supply zone: [latest_fvg_supply_bottom, latest_fvg_supply_top]
+bool is_short_level_verified = false
+if not na(target_short_entry)
+    in_manip_supply = (target_short_entry >= range_midpoint and target_short_entry <= op_high)
+    in_fvg_supply = (not na(latest_fvg_supply_top) and target_short_entry >= latest_fvg_supply_bottom and target_short_entry <= latest_fvg_supply_top)
+    is_short_level_verified := in_manip_supply or in_fvg_supply
+
+// Verification Rule B: Range Extreme Filter
+// Markets range 70-80% of the time. To prevent choppy false entries:
+// - Long/Buy signals must strictly execute at the bottom of the range (low <= range_midpoint)
+// - Short/Sell signals must strictly execute at the top of the range (high >= range_midpoint)
+bool is_at_range_low_extreme = (low <= range_midpoint)
+bool is_at_range_high_extreme = (high >= range_midpoint)
+
+// Verification Rule C: Cooldown Control
+// Limit signals to exactly 1 Buy and 1 Sell signal per identified manipulation range.
+bool is_buy_cooldown_ok = (buy_count_this_range == 0)
+bool is_sell_cooldown_ok = (sell_count_this_range == 0)
+
+// ==========================================
+// 6. SIGNAL GENERATION LOGIC
 // ==========================================
 
 // Long Entry Condition (Bearish Impulse):
-long_entry_condition = has_bearish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and long_triggered
+// - Must have bearish manipulation bias
+// - Must be within execution session
+// - Must not have an active trade running
+// - Must be a new bar since last entry
+// - Target long level must be triggered
+// - Must pass Supply/Demand verification
+// - Must be at the bottom extreme of the range
+// - Must satisfy buy cooldown control
+long_entry_condition = has_bearish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and long_triggered and is_long_level_verified and is_at_range_low_extreme and is_buy_cooldown_ok
 
 // Short Entry Condition (Bullish Impulse):
-short_entry_condition = has_bullish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and short_triggered
+// - Must have bullish manipulation bias
+// - Must be within execution session
+// - Must not have an active trade running
+// - Must be a new bar since last entry
+// - Target short level must be triggered
+// - Must pass Supply/Demand verification
+// - Must be at the top extreme of the range
+// - Must satisfy sell cooldown control
+short_entry_condition = has_bullish_bias and in_execution_session and (active_direction == 0) and (bar_index > last_trade_bar) and short_triggered and is_short_level_verified and is_at_range_high_extreme and is_sell_cooldown_ok
 
 // Dynamic TP calculation based on selections
 f_get_tp(is_long, entry_p) =>
@@ -190,18 +280,20 @@ f_calculate_sl(is_long, entry_p, tp_p) =>
         calculated_sl := is_long ? (entry_p - (manual_sl_ticks * syminfo.mintick)) : (entry_p + (manual_sl_ticks * syminfo.mintick))
     calculated_sl
 
-// Execute Long Trade State
+// Execute Long Trade State and Increment Cooldown count
 if long_entry_condition
     active_direction := 1
     last_trade_bar := bar_index
+    buy_count_this_range := buy_count_this_range + 1
     active_entry_price := target_long_entry
     active_tp_price := f_get_tp(true, target_long_entry)
     active_sl_price := f_calculate_sl(true, target_long_entry, active_tp_price)
 
-// Execute Short Trade State
+// Execute Short Trade State and Increment Cooldown count
 if short_entry_condition
     active_direction := -1
     last_trade_bar := bar_index
+    sell_count_this_range := sell_count_this_range + 1
     active_entry_price := target_short_entry
     active_tp_price := f_get_tp(false, target_short_entry)
     active_sl_price := f_calculate_sl(false, target_short_entry, active_tp_price)
@@ -224,7 +316,7 @@ if active_direction == -1 // Active Short
         active_direction := 0
 
 // ==========================================
-// 6. CHART PLOTS, LABELS & ALERTS
+// 7. CHART PLOTS, LABELS & ALERTS
 // ==========================================
 
 // Draw Impulse Range Levels
@@ -249,7 +341,7 @@ alertcondition(long_entry_condition, title="Institutional Buy Alert", message="O
 alertcondition(short_entry_condition, title="Institutional Sell Alert", message="Opening Range Manipulation: Institutional SELL Entry Triggered!")
 
 // ==========================================
-// 7. SESSION STATUS DASHBOARD TABLE
+// 8. SESSION STATUS DASHBOARD TABLE
 // ==========================================
 var table info_table = table.new(position.top_right, 2, 5, border_width = 1, border_color = color.gray)
 
