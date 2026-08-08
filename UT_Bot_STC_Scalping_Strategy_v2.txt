@@ -1,0 +1,310 @@
+//@version=5
+indicator("UT Bot & STC Scalping Strategy v2", overlay=true, max_labels_count=500, max_boxes_count=500)
+
+// ==========================================
+// 1. USER INPUTS & CONFIGURATIONS
+// ==========================================
+
+// UT Bot Instance A (Sell Filter)
+grp_ut_a = "UT Bot Instance A (Sell Filter)"
+a_key    = input.float(2.0, title="Key Value (Sensitivity)", group=grp_ut_a, tooltip="Sensitivity multiplier for trailing stop.")
+a_atr    = input.int(1, title="ATR Period", group=grp_ut_a, tooltip="ATR calculation lookback period.")
+
+// UT Bot Instance B (Buy Filter)
+grp_ut_b = "UT Bot Instance B (Buy Filter)"
+b_key    = input.float(2.0, title="Key Value (Sensitivity)", group=grp_ut_b, tooltip="Sensitivity multiplier for trailing stop.")
+b_atr    = input.int(300, title="ATR Period", group=grp_ut_b, tooltip="ATR calculation lookback period.")
+
+// STC Oscillator
+grp_stc  = "Schaff Trend Cycle (STC) Oscillator"
+stc_length = input.int(80, title="STC Length (Cycle Length)", group=grp_stc, tooltip="Lookback period for stochastic normalization.")
+stc_fast   = input.int(27, title="MACD Fast Length", group=grp_stc)
+stc_slow   = input.int(50, title="MACD Slow Length", group=grp_stc)
+stc_d1     = input.int(3, title="1st %D Smoothing", group=grp_stc)
+stc_d2     = input.int(3, title="2nd %D Smoothing", group=grp_stc)
+oversold   = input.float(25.0, title="Oversold (Green Line) Threshold", group=grp_stc)
+overbought = input.float(75.0, title="Overbought (Red Line) Threshold", group=grp_stc)
+
+// Confirmation Bars
+grp_confirm = "STC Momentum Confirmation Filters"
+stc_up_bars   = input.int(2, title="STC Uptrend Confirmation Bars", minval=1, group=grp_confirm, tooltip="Number of consecutive rising bars required for uptrend verification.")
+stc_down_bars = input.int(2, title="STC Downtrend Confirmation Bars", minval=1, group=grp_confirm, tooltip="Number of consecutive falling bars required for downtrend verification.")
+
+// Risk Management
+grp_risk = "Risk Management Settings"
+swing_lookback = input.int(10, minval=2, title="Swing High/Low Lookback", group=grp_risk, tooltip="Lookback period to find recent swing high/low for SL.")
+sl_padding     = input.float(0.0, title="Stop Loss Padding (ticks)", minval=0.0, group=grp_risk, tooltip="Extra distance added/subtracted to/from the swing level.")
+risk_reward    = input.float(2.0, title="Risk-to-Reward Ratio (1:X)", minval=0.1, group=grp_risk, tooltip="Multiplier for SL distance to set TP.")
+
+// Styling & Dashboard
+grp_style = "Visual Interface & Dashboard"
+show_dashboard = input.bool(true, title="Show On-Chart Status Dashboard", group=grp_style)
+show_signals   = input.bool(true, title="Show Buy/Sell Entry Labels", group=grp_style)
+show_levels    = input.bool(true, title="Show Active Trade SL/TP Lines", group=grp_style)
+
+// ==========================================
+// 2. TIMEFRAME OPTIMIZATION & MTF HANDLING
+// ==========================================
+
+// Identify if the chart resolution is lower than 5 minutes
+is_lower_tf = (timeframe.isseconds or (timeframe.isminutes and timeframe.multiplier < 5))
+execution_tf = is_lower_tf ? "5" : timeframe.period
+use_mtf = is_lower_tf
+
+// ==========================================
+// 3. CORE INDICATOR IMPLEMENTATIONS (GLOBAL)
+// ==========================================
+
+// Helper function for UT Bot trailing stop calculation
+f_ut_bot(src, key_value, atr_period) =>
+    xATR = ta.atr(atr_period)
+    nLoss = key_value * xATR
+    var float trailing_stop = na
+    trailing_stop := if src > nz(trailing_stop[1], 0) and src[1] > nz(trailing_stop[1], 0)
+        math.max(nz(trailing_stop[1]), src - nLoss)
+    else if src < nz(trailing_stop[1], 0) and src[1] < nz(trailing_stop[1], 0)
+        math.min(nz(trailing_stop[1]), src + nLoss)
+    else if src > nz(trailing_stop[1], 0)
+        src - nLoss
+    else
+        src + nLoss
+    trailing_stop
+
+// UT Bot trailing stops computed on the chart's historical bars
+stop_A_local = f_ut_bot(close, a_key, a_atr)
+stop_B_local = f_ut_bot(close, b_key, b_atr)
+
+sell_A_local = ta.crossunder(close, stop_A_local)
+buy_B_local  = ta.crossover(close, stop_B_local)
+
+// Schaff Trend Cycle (STC) Oscillator
+f_stc(src, fast_len, slow_len, cycle_len, d1_len, d2_len) =>
+    macd_val = ta.ema(src, fast_len) - ta.ema(src, slow_len)
+
+    // First stochastic cycle
+    lowest_macd = ta.lowest(macd_val, cycle_len)
+    highest_macd = ta.highest(macd_val, cycle_len)
+    macd_range = highest_macd - lowest_macd
+    k = macd_range > 0 ? 100 * (macd_val - lowest_macd) / macd_range : 0.0
+    d = ta.ema(k, d1_len)
+
+    // Second stochastic cycle
+    lowest_d = ta.lowest(d, cycle_len)
+    highest_d = ta.highest(d, cycle_len)
+    d_range = highest_d - lowest_d
+    kd = d_range > 0 ? 100 * (d - lowest_d) / d_range : 0.0
+    stc_val = ta.ema(kd, d2_len)
+
+    // Hard boundary capping [0, 100]
+    stc_val := stc_val > 100.0 ? 100.0 : (stc_val < 0.0 ? 0.0 : stc_val)
+    stc_val
+
+stc_local = f_stc(close, stc_fast, stc_slow, stc_length, stc_d1, stc_d2)
+
+// ==========================================
+// 4. MULTI-TIMEFRAME (MTF) SECURITY RESOLUTION
+// ==========================================
+
+// Helper function to verify consecutive rising bars
+f_is_rising(series, bars) =>
+    is_rising = true
+    if bars > 0
+        for i = 0 to bars - 1
+            if series[i] <= series[i + 1]
+                is_rising := false
+                break
+    is_rising
+
+// Helper function to verify consecutive falling bars
+f_is_falling(series, bars) =>
+    is_falling = true
+    if bars > 0
+        for i = 0 to bars - 1
+            if series[i] >= series[i + 1]
+                is_falling := false
+                break
+    is_falling
+
+// Calculate local momentum turns directly on native series to prevent step repetition issues in MTF
+stc_turned_up_local   = f_is_rising(stc_local, stc_up_bars) and (stc_local[stc_up_bars] <= stc_local[stc_up_bars + 1])
+stc_turned_down_local = f_is_falling(stc_local, stc_down_bars) and (stc_local[stc_down_bars] >= stc_local[stc_down_bars + 1])
+
+// Pack all required signal expressions for standard, non-repainting MTF collection
+expr_sell_A   = sell_A_local ? 1.0 : 0.0
+expr_buy_B    = buy_B_local ? 1.0 : 0.0
+expr_stc      = stc_local
+expr_stop_A   = stop_A_local
+expr_stop_B   = stop_B_local
+expr_stc_up   = stc_turned_up_local ? 1.0 : 0.0
+expr_stc_down = stc_turned_down_local ? 1.0 : 0.0
+
+// Non-repainting request.security calls
+[raw_sell_A, raw_buy_B, raw_stc, raw_stop_A, raw_stop_B, raw_stc_up, raw_stc_down] = request.security(
+     syminfo.tickerid,
+     execution_tf,
+     [expr_sell_A, expr_buy_B, expr_stc, expr_stop_A, expr_stop_B, expr_stc_up, expr_stc_down],
+     gaps = barmerge.gaps_on,
+     lookahead = barmerge.lookahead_off
+ )
+
+// Safe gap-filling helper for non-repainting series
+f_gap_fill(val) =>
+    var float filled_val = na
+    if not na(val)
+        filled_val := val
+    filled_val
+
+// Processed MTF indicators - Note: Event crossovers should not be gap-filled (to avoid double entry on the same bar cluster)
+sec_sell_A   = not na(raw_sell_A) and raw_sell_A == 1.0
+sec_buy_B    = not na(raw_buy_B) and raw_buy_B == 1.0
+sec_stc      = f_gap_fill(raw_stc)
+sec_stop_A   = f_gap_fill(raw_stop_A)
+sec_stop_B   = f_gap_fill(raw_stop_B)
+sec_stc_up   = not na(raw_stc_up) and raw_stc_up == 1.0
+sec_stc_down = not na(raw_stc_down) and raw_stc_down == 1.0
+
+// Select final values based on timeframe execution override
+final_sell_A    = use_mtf ? sec_sell_A : sell_A_local
+final_buy_B     = use_mtf ? sec_buy_B : buy_B_local
+final_stc       = use_mtf ? sec_stc : stc_local
+stc_turned_up   = use_mtf ? sec_stc_up : stc_turned_up_local
+stc_turned_down = use_mtf ? sec_stc_down : stc_turned_down_local
+
+// ==========================================
+// 5. TRADE ENTRY MULTI-CONFIRMATION LOGIC
+// ==========================================
+
+// Absolute entry signal flags
+longCondition  = final_buy_B and (final_stc < oversold) and stc_turned_up
+shortCondition = final_sell_A and (final_stc > overbought) and stc_turned_down
+
+// ==========================================
+// 6. REAL-TIME TRADE & RISK TRACKING
+// ==========================================
+
+var int trade_position = 0     // 0 = Flat, 1 = Long, -1 = Short
+var float entry_px     = na
+var float sl_px        = na
+var float tp_px        = na
+
+// Stateful ATR defined globally to ensure proper history tracking on every bar
+atr_14 = ta.atr(14)
+
+// Dynamic swing determination
+swing_l = ta.lowest(low, swing_lookback)
+swing_h = ta.highest(high, swing_lookback)
+
+// Entry and Exit State Machine
+if trade_position == 0
+    if longCondition
+        trade_position := 1
+        entry_px       := close
+        sl_px          := swing_l - (sl_padding * syminfo.mintick)
+        // Guard against zero-distance or faulty SL
+        if sl_px >= close
+            sl_px := close - (atr_14 * 1.5)
+        tp_px          := close + (close - sl_px) * risk_reward
+
+        if show_signals
+            label.new(
+                 bar_index,
+                 low,
+                 text="BUY",
+                 style=label.style_label_up,
+                 color=color.green,
+                 textcolor=color.white,
+                 yloc=yloc.belowbar,
+                 size=size.normal
+             )
+
+    else if shortCondition
+        trade_position := -1
+        entry_px       := close
+        sl_px          := swing_h + (sl_padding * syminfo.mintick)
+        // Guard against zero-distance or faulty SL
+        if sl_px <= close
+            sl_px := close + (atr_14 * 1.5)
+        tp_px          := close - (sl_px - close) * risk_reward
+
+        if show_signals
+            label.new(
+                 bar_index,
+                 high,
+                 text="SELL",
+                 style=label.style_label_down,
+                 color=color.red,
+                 textcolor=color.white,
+                 yloc=yloc.abovebar,
+                 size=size.normal
+             )
+else
+    // Check exit conditions
+    if trade_position == 1
+        if low <= sl_px
+            trade_position := 0
+            entry_px       := na
+            sl_px          := na
+            tp_px          := na
+        else if high >= tp_px
+            trade_position := 0
+            entry_px       := na
+            sl_px          := na
+            tp_px          := na
+    else if trade_position == -1
+        if high >= sl_px
+            trade_position := 0
+            entry_px       := na
+            sl_px          := na
+            tp_px          := na
+        else if low <= tp_px
+            trade_position := 0
+            entry_px       := na
+            sl_px          := na
+            tp_px          := na
+
+// Plot active trade SL/TP levels
+plot(show_levels and trade_position != 0 ? sl_px : na, title="Active Stop Loss", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(show_levels and trade_position != 0 ? tp_px : na, title="Active Take Profit", color=color.green, style=plot.style_linebr, linewidth=2)
+plot(show_levels and trade_position != 0 ? entry_px : na, title="Active Entry Price", color=color.gray, style=plot.style_linebr, linewidth=1)
+
+// ==========================================
+// 7. AUTOMATED ALERT CONDITIONS
+// ==========================================
+
+alertcondition(longCondition, title="Long Entry Alert", message="UT Bot & STC Dual Confirmation Long Entry! Entry Price: {{close}}")
+alertcondition(shortCondition, title="Short Entry Alert", message="UT Bot & STC Dual Confirmation Short Entry! Entry Price: {{close}}")
+
+// ==========================================
+// 8. ON-CHART STATUS DASHBOARD
+// ==========================================
+
+var table dashboard = table.new(position.top_right, columns=2, rows=6, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+if show_dashboard and barstate.islast
+    table.cell(dashboard, 0, 0, "SYSTEM MONITOR", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 0, "STATUS / VALUE", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+
+    // Timeframe Override Status
+    table.cell(dashboard, 0, 1, "Execution TF", text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 1, execution_tf + (use_mtf ? " (MTF Force)" : ""), text_color=color.yellow, text_size=size.small)
+
+    // Active Trade State
+    pos_str = trade_position == 1 ? "LONG ACTIVE" : (trade_position == -1 ? "SHORT ACTIVE" : "FLAT")
+    pos_col = trade_position == 1 ? color.green : (trade_position == -1 ? color.red : color.gray)
+    table.cell(dashboard, 0, 2, "Active Trade", text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 2, pos_str, bgcolor=color.new(pos_col, 20), text_color=color.white, text_size=size.small)
+
+    // Live STC value
+    table.cell(dashboard, 0, 3, "STC Oscillator", text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 3, str.tostring(final_stc, "0.00"), text_color=color.cyan, text_size=size.small)
+
+    // Momentum status
+    mom_str = stc_turned_up ? "Bullish Turn" : (stc_turned_down ? "Bearish Turn" : "Neutral")
+    mom_col = stc_turned_up ? color.green : (stc_turned_down ? color.red : color.gray)
+    table.cell(dashboard, 0, 4, "Momentum Turn", text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 4, mom_str, bgcolor=color.new(mom_col, 20), text_color=color.white, text_size=size.small)
+
+    // System Alerts Status
+    alert_str = longCondition ? "BUY SIGNAL" : (shortCondition ? "SELL SIGNAL" : "NO SIGNAL")
+    alert_col = longCondition ? color.green : (shortCondition ? color.red : color.gray)
+    table.cell(dashboard, 0, 5, "Signal Event", text_color=color.white, text_size=size.small)
+    table.cell(dashboard, 1, 5, alert_str, bgcolor=color.new(alert_col, 20), text_color=color.white, text_size=size.small)
