@@ -1,0 +1,296 @@
+//@version=5
+indicator("Traders Monopoly STC Double-Verification Scalping Strategy", overlay=true, max_labels_count=500)
+
+// ==========================================
+// MODULE 1: INPUTS PANEL
+// ==========================================
+
+// UT Bot Group
+gp_ut = "UT Bot Core Configuration"
+a_sell = input.float(2.0, title="UT Bot Instance A (Sell Filter) Key Value", tooltip="Changes the sensitivity of the Sell filter", group=gp_ut)
+c_sell = input.int(1, title="UT Bot Instance A (Sell Filter) ATR Period", tooltip="ATR period used for calculating trailing stop", group=gp_ut)
+a_buy  = input.float(2.0, title="UT Bot Instance B (Buy Filter) Key Value", tooltip="Changes the sensitivity of the Buy filter", group=gp_ut)
+c_buy  = input.int(300, title="UT Bot Instance B (Buy Filter) ATR Period", tooltip="ATR period used for calculating trailing stop", group=gp_ut)
+ut_lookback = input.int(1, title="UT Bot Signal Lookback Window", minval=1, tooltip="Number of bars to look back for a UT Bot signal to pair with STC confirmation", group=gp_ut)
+show_ut_a = input.bool(false, title="Show UT Bot A (Sell Filter) Trailing Stop", group=gp_ut)
+show_ut_b = input.bool(false, title="Show UT Bot B (Buy Filter) Trailing Stop", group=gp_ut)
+
+// STC Group
+gp_stc = "Schaff Trend Cycle (STC) Configuration"
+stc_len = input.int(80, title="STC Length", tooltip="Lookback period for the STC oscillator calculation", group=gp_stc)
+stc_fast = input.int(27, title="STC Fast Length", tooltip="Fast EMA period for STC's internal MACD", group=gp_stc)
+stc_slow = input.int(50, title="STC Slow Length", tooltip="Slow EMA period for STC's internal MACD", group=gp_stc)
+stc_factor = input.float(0.5, title="STC Factor", tooltip="Smoothing weight factor", group=gp_stc)
+overbought = input.float(75.0, title="STC Overbought Level (Red)", group=gp_stc)
+oversold = input.float(25.0, title="STC Oversold Level (Green)", group=gp_stc)
+
+// Risk Management Group
+gp_risk = "Risk & Execution Management"
+swing_len = input.int(10, title="Swing High/Low Lookback (for SL)", tooltip="Lookback bars to identify recent swing high or low", group=gp_risk)
+rr_ratio = input.float(2.0, title="Risk-to-Reward Ratio (1:X)", tooltip="Target reward ratio based on the stop-loss distance", group=gp_risk)
+pyramiding = input.bool(false, title="Allow Pyramiding", tooltip="Enable multiple entries in the same direction before current trade is closed", group=gp_risk)
+
+// Advanced Filters
+gp_adv = "Advanced & Timeframe Filters"
+enforce_timeframe = input.bool(true, title="Enforce Timeframe Restriction (>= 5m)", tooltip="Enable runtime error if the chart timeframe is under 5 minutes", group=gp_adv)
+ha_source = input.bool(false, title="Use Heikin Ashi Close Source", tooltip="Use Heikin Ashi calculated close instead of standard close", group=gp_adv)
+
+
+// ==========================================
+// MODULE 2: INDICATORS & TF VALIDATION
+// ==========================================
+
+// Enforce Timeframe Restriction
+is_below_5m = (timeframe.isseconds or (timeframe.isminutes and timeframe.multiplier < 5))
+if enforce_timeframe and is_below_5m
+    runtime.error("This strategy must only execute on 5-minute timeframes or higher to ensure signal validity.")
+
+// Heikin Ashi Calculation
+var float ha_open = na
+ha_close_native = (open + high + low + close) / 4
+ha_open := na(ha_open[1]) ? (open + close) / 2 : (nz(ha_open[1]) + nz(ha_close_native[1])) / 2
+src = ha_source ? ha_close_native : close
+
+// --- UT Bot Instance A (Sell Filter) ---
+xATR_A = ta.atr(c_sell)
+nLoss_A = a_sell * xATR_A
+
+var float xATRTrailingStop_A = na
+xATRTrailingStop_A := if src > nz(xATRTrailingStop_A[1], 0) and src[1] > nz(xATRTrailingStop_A[1], 0)
+    math.max(nz(xATRTrailingStop_A[1]), src - nLoss_A)
+else if src < nz(xATRTrailingStop_A[1], 0) and src[1] < nz(xATRTrailingStop_A[1], 0)
+    math.min(nz(xATRTrailingStop_A[1]), src + nLoss_A)
+else if src > nz(xATRTrailingStop_A[1], 0)
+    src - nLoss_A
+else
+    src + nLoss_A
+
+var int pos_A = 0
+pos_A := if src[1] < nz(xATRTrailingStop_A[1], 0) and src > nz(xATRTrailingStop_A[1], 0)
+    1
+else if src[1] > nz(xATRTrailingStop_A[1], 0) and src < nz(xATRTrailingStop_A[1], 0)
+    -1
+else
+    nz(pos_A[1], 0)
+
+ema_A = ta.ema(src, 1)
+above_A = ta.crossover(ema_A, xATRTrailingStop_A)
+below_A = ta.crossover(xATRTrailingStop_A, ema_A)
+buy_A = src > xATRTrailingStop_A and above_A
+sell_A = src < xATRTrailingStop_A and below_A
+
+// --- UT Bot Instance B (Buy Filter) ---
+xATR_B = ta.atr(c_buy)
+nLoss_B = a_buy * xATR_B
+
+var float xATRTrailingStop_B = na
+xATRTrailingStop_B := if src > nz(xATRTrailingStop_B[1], 0) and src[1] > nz(xATRTrailingStop_B[1], 0)
+    math.max(nz(xATRTrailingStop_B[1]), src - nLoss_B)
+else if src < nz(xATRTrailingStop_B[1], 0) and src[1] < nz(xATRTrailingStop_B[1], 0)
+    math.min(nz(xATRTrailingStop_B[1]), src + nLoss_B)
+else if src > nz(xATRTrailingStop_B[1], 0)
+    src - nLoss_B
+else
+    src + nLoss_B
+
+var int pos_B = 0
+pos_B := if src[1] < nz(xATRTrailingStop_B[1], 0) and src > nz(xATRTrailingStop_B[1], 0)
+    1
+else if src[1] > nz(xATRTrailingStop_B[1], 0) and src < nz(xATRTrailingStop_B[1], 0)
+    -1
+else
+    nz(pos_B[1], 0)
+
+ema_B = ta.ema(src, 1)
+above_B = ta.crossover(ema_B, xATRTrailingStop_B)
+below_B = ta.crossover(xATRTrailingStop_B, ema_B)
+buy_B = src > xATRTrailingStop_B and above_B
+sell_B = src < xATRTrailingStop_B and below_B
+
+
+// --- Schaff Trend Cycle (STC) Oscillator ---
+fast_ma = ta.ema(src, stc_fast)
+slow_ma = ta.ema(src, stc_slow)
+macd_val = fast_ma - slow_ma
+
+var float f1 = na
+var float pf = na
+lowest_m = ta.lowest(macd_val, stc_len)
+highest_m = ta.highest(macd_val, stc_len)
+m_range = highest_m - lowest_m
+f1 := m_range > 0 ? ((macd_val - lowest_m) / m_range) * 100.0 : nz(f1[1], 0.0)
+pf := na(pf[1]) ? f1 : pf[1] + (stc_factor * (f1 - pf[1]))
+
+var float f2 = na
+var float pff = na
+lowest_pf = ta.lowest(pf, stc_len)
+highest_pf = ta.highest(pf, stc_len)
+pf_range = highest_pf - lowest_pf
+f2 := pf_range > 0 ? ((pf - lowest_pf) / pf_range) * 100.0 : nz(f2[1], 0.0)
+pff := na(pff[1]) ? f2 : pff[1] + (stc_factor * (f2 - pff[1]))
+
+stc_val = pff
+
+
+// ==========================================
+// MODULE 3: ENTRY & RISK LOGIC (STATE MACHINE)
+// ==========================================
+
+// Momentum Double-Verification Calculations
+stc_rising_2_bars = (stc_val > stc_val[1]) and (stc_val[1] > stc_val[2])
+stc_turn_up = stc_val[2] <= stc_val[3]
+stc_buy_momentum = stc_rising_2_bars and stc_turn_up
+
+stc_falling_2_bars = (stc_val < stc_val[1]) and (stc_val[1] < stc_val[2])
+stc_turn_down = stc_val[2] >= stc_val[3]
+stc_sell_momentum = stc_falling_2_bars and stc_turn_down
+
+// Lookback signals for UT Bot crossovers
+ut_buy_signal_active = not na(ta.barssince(buy_B)) and ta.barssince(buy_B) < ut_lookback
+ut_sell_signal_active = not na(ta.barssince(sell_A)) and ta.barssince(sell_A) < ut_lookback
+
+// Entry Conditions
+long_condition = ut_buy_signal_active and (stc_val < oversold) and stc_buy_momentum
+short_condition = ut_sell_signal_active and (stc_val > overbought) and stc_sell_momentum
+
+// Execution State Variables
+var int active_trade = 0 // 0 = none, 1 = long, -1 = short
+var float entry_price = na
+var float sl_price = na
+var float tp_price = na
+
+// Trade Statistics
+var int total_trades = 0
+var int win_trades = 0
+var int loss_trades = 0
+
+// Swing High/Low calculations
+swing_low = ta.lowest(low, swing_len)
+swing_high = ta.highest(high, swing_len)
+
+// State Logic (only executes on confirmed closed bars)
+trigger_buy = false
+trigger_sell = false
+
+if barstate.isconfirmed
+    // Track Exits first if trade is active
+    if active_trade == 1
+        if low <= sl_price
+            active_trade := 0
+            loss_trades := loss_trades + 1
+        else if high >= tp_price
+            active_trade := 0
+            win_trades := win_trades + 1
+
+    else if active_trade == -1
+        if high >= sl_price
+            active_trade := 0
+            loss_trades := loss_trades + 1
+        else if low <= tp_price
+            active_trade := 0
+            win_trades := win_trades + 1
+
+    // Evaluate Entries
+    if long_condition and (active_trade == 0 or pyramiding)
+        active_trade := 1
+        entry_price := close
+        sl_dist = close - swing_low
+        if sl_dist <= 0
+            sl_dist := ta.atr(14) * 1.5
+        sl_price := close - sl_dist
+        tp_price := close + (sl_dist * rr_ratio)
+        total_trades := total_trades + 1
+        trigger_buy := true
+
+    else if short_condition and (active_trade == 0 or pyramiding)
+        active_trade := -1
+        entry_price := close
+        sl_dist = swing_high - close
+        if sl_dist <= 0
+            sl_dist := ta.atr(14) * 1.5
+        sl_price := close + sl_dist
+        tp_price := close - (sl_dist * rr_ratio)
+        total_trades := total_trades + 1
+        trigger_sell := true
+
+
+// ==========================================
+// MODULE 4: VISUAL INTERFACE & SIGNAL UI
+// ==========================================
+
+// Signal Labels
+if trigger_buy
+    label.new(
+         x=bar_index,
+         y=low,
+         text="BUY",
+         color=color.green,
+         textcolor=color.white,
+         style=label.style_label_up,
+         yloc=yloc.belowbar,
+         size=size.normal
+     )
+
+if trigger_sell
+    label.new(
+         x=bar_index,
+         y=high,
+         text="SELL",
+         color=color.red,
+         textcolor=color.white,
+         style=label.style_label_down,
+         yloc=yloc.abovebar,
+         size=size.normal
+     )
+
+// Dynamic Risk/Reward Plots
+plot_sl = active_trade != 0 ? sl_price : na
+plot_tp = active_trade != 0 ? tp_price : na
+plot(plot_sl, title="Stop Loss", color=color.new(color.red, 30), style=plot.style_linebr, linewidth=2)
+plot(plot_tp, title="Take Profit", color=color.new(color.green, 30), style=plot.style_linebr, linewidth=2)
+
+// UT Bot Trailing Stop Plots (Optional display)
+plot(show_ut_a ? xATRTrailingStop_A : na, title="UT Bot A Trailing Stop", color=color.new(color.red, 60), linewidth=1)
+plot(show_ut_b ? xATRTrailingStop_B : na, title="UT Bot B Trailing Stop", color=color.new(color.green, 60), linewidth=1)
+
+// STC Oscillator State Ribbon plotted at bottom of price pane
+stc_color = stc_val < oversold ? color.green : stc_val > overbought ? color.red : color.gray
+plotshape(true, title="STC State Ribbon", location=location.bottom, color=stc_color, style=shape.square, size=size.small)
+
+// Real-Time HUD Dashboard
+var table stats_table = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 20), border_width=1, border_color=color.gray)
+if barstate.islast
+    // Header
+    table.cell(stats_table, 0, 0, "Metric", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+    table.cell(stats_table, 1, 0, "Value", text_color=color.white, bgcolor=color.gray, text_size=size.small)
+
+    // STC Value
+    table.cell(stats_table, 0, 1, "STC Oscillator", text_color=color.white, text_size=size.small)
+    table.cell(stats_table, 1, 1, str.tostring(stc_val, "#.##"), text_color=(stc_val > overbought ? color.red : stc_val < oversold ? color.green : color.white), text_size=size.small)
+
+    // Position
+    table.cell(stats_table, 0, 2, "Active Trade", text_color=color.white, text_size=size.small)
+    pos_text = active_trade == 1 ? "LONG" : active_trade == -1 ? "SHORT" : "NONE"
+    pos_color = active_trade == 1 ? color.green : active_trade == -1 ? color.red : color.gray
+    table.cell(stats_table, 1, 2, pos_text, text_color=color.white, bgcolor=pos_color, text_size=size.small)
+
+    // Win Rate
+    win_rate = total_trades > 0 ? (win_trades * 100.0 / total_trades) : 0.0
+    table.cell(stats_table, 0, 3, "Win Rate", text_color=color.white, text_size=size.small)
+    table.cell(stats_table, 1, 3, str.tostring(win_rate, "#.##") + "%", text_color=win_rate >= 60 ? color.green : color.white, text_size=size.small)
+
+    // Total Trades
+    table.cell(stats_table, 0, 4, "Total Trades", text_color=color.white, text_size=size.small)
+    table.cell(stats_table, 1, 4, str.tostring(total_trades), text_color=color.white, text_size=size.small)
+
+    // Wins / Losses
+    table.cell(stats_table, 0, 5, "Wins / Losses", text_color=color.white, text_size=size.small)
+    table.cell(stats_table, 1, 5, str.tostring(win_trades) + " W / " + str.tostring(loss_trades) + " L", text_color=color.white, text_size=size.small)
+
+
+// ==========================================
+// MODULE 5: ALERTS & REAL-TIME NOTIFICATIONS
+// ==========================================
+
+alertcondition(long_condition, title="Traders Monopoly STC Long Entry", message="BUY Signal: STC Double-Verification Scalping Strategy")
+alertcondition(short_condition, title="Traders Monopoly STC Short Entry", message="SELL Signal: STC Double-Verification Scalping Strategy")
