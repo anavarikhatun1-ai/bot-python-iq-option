@@ -1,0 +1,278 @@
+//@version=5
+strategy("UT Bot & STC Scalping Strategy", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.03)
+
+// ==========================================
+// 1. INPUTS & CONFIGURATIONS
+// ==========================================
+
+// UT Bot Buy-Side Inputs
+gp_ut_buy = "UT Bot - Buy-Side (Longs)"
+buy_key_value = input.float(2.0, title="Buy Key Value (Sensitivity)", group=gp_ut_buy, tooltip="Multiplier for ATR distance. Lower values increase sensitivity.")
+buy_atr_period = input.int(300, title="Buy ATR Period", group=gp_ut_buy, tooltip="Lookback period for ATR calculation.")
+
+// UT Bot Sell-Side Inputs
+gp_ut_sell = "UT Bot - Sell-Side (Shorts)"
+sell_key_value = input.float(2.0, title="Sell Key Value (Sensitivity)", group=gp_ut_sell, tooltip="Multiplier for ATR distance. Lower values increase sensitivity.")
+sell_atr_period = input.int(1, title="Sell ATR Period", group=gp_ut_sell, tooltip="Lookback period for ATR calculation.")
+
+// STC Oscillator Inputs
+gp_stc = "STC Oscillator (Momentum)"
+stc_fast_length = input.int(27, title="STC Fast Length", group=gp_stc, tooltip="Fast EMA period for underlying MACD.")
+stc_slow_length = input.int(80, title="STC Length (Slow Length)", group=gp_stc, tooltip="Slow EMA period for underlying MACD.")
+stc_cycle_length = input.int(10, title="STC Cycle Length", group=gp_stc, tooltip="Lookback for stochastic calculation.")
+stc_d1_length = input.int(3, title="1st %D Smoothing", group=gp_stc, tooltip="First smoothing EMA period.")
+stc_d2_length = input.int(3, title="2nd %D Smoothing", group=gp_stc, tooltip="Second smoothing EMA period.")
+stc_overbought = input.float(75.0, title="Overbought Threshold (Red)", group=gp_stc, minval=50.0, maxval=100.0)
+stc_oversold = input.float(25.0, title="Oversold Threshold (Green)", group=gp_stc, minval=0.0, maxval=50.0)
+
+// Risk Management Inputs
+gp_risk = "Risk & Money Management"
+swing_lookback = input.int(10, title="Swing High/Low Lookback", minval=2, group=gp_risk, tooltip="Lookback bars to determine Stop Loss level.")
+sl_buffer_pct = input.float(0.0, title="Stop Loss Buffer (%)", minval=0.0, group=gp_risk, tooltip="Percentage buffer to pad the swing-based Stop Loss.")
+risk_reward_ratio = input.float(2.0, title="Risk-to-Reward Ratio (1:X)", minval=0.5, group=gp_risk, tooltip="Multiplier of risk to calculate Take Profit.")
+
+// Visuals & Dashboard Inputs
+gp_visuals = "Visuals & Dashboard"
+show_dashboard = input.bool(true, title="Show On-Chart Performance Dashboard", group=gp_visuals)
+dashboard_pos = input.string("Top Right", title="Dashboard Position", options=["Top Right", "Bottom Right", "Top Left", "Bottom Left"], group=gp_visuals)
+bg_color_input = input.color(color.new(color.black, 20), title="Dashboard Background Color", group=gp_visuals)
+
+// ==========================================
+// 2. UT BOT SIGNAL CALCULATIONS
+// ==========================================
+
+// Helper function to calculate non-repainting UT Bot Trailing Stop and Signals
+// We write this logic cleanly and explicitly for both instances to prevent any potential state-sharing bugs in Pine Script.
+
+// UT Bot Buy-Side Calculation
+buy_atr = ta.atr(buy_atr_period)
+buy_loss = buy_key_value * buy_atr
+
+var float buy_trailing_stop = na
+var int buy_pos = 0
+
+if na(buy_trailing_stop)
+    buy_trailing_stop := close - buy_loss
+else
+    if close > buy_trailing_stop[1] and close[1] > buy_trailing_stop[1]
+        buy_trailing_stop := math.max(buy_trailing_stop[1], close - buy_loss)
+    else if close < buy_trailing_stop[1] and close[1] < buy_trailing_stop[1]
+        buy_trailing_stop := math.min(buy_trailing_stop[1], close + buy_loss)
+    else if close > buy_trailing_stop[1]
+        buy_trailing_stop := close - buy_loss
+    else
+        buy_trailing_stop := close + buy_loss
+
+if close > buy_trailing_stop[1] and close[1] <= buy_trailing_stop[1]
+    buy_pos := 1
+else if close < buy_trailing_stop[1] and close[1] >= buy_trailing_stop[1]
+    buy_pos := -1
+
+// Only generate "Buy" signals from the Buy-Side UT Bot
+buy_signal_triggered = (buy_pos == 1 and buy_pos[1] == -1)
+
+// UT Bot Sell-Side Calculation
+sell_atr = ta.atr(sell_atr_period)
+sell_loss = sell_key_value * sell_atr
+
+var float sell_trailing_stop = na
+var int sell_pos = 0
+
+if na(sell_trailing_stop)
+    sell_trailing_stop := close - sell_loss
+else
+    if close > sell_trailing_stop[1] and close[1] > sell_trailing_stop[1]
+        sell_trailing_stop := math.max(sell_trailing_stop[1], close - sell_loss)
+    else if close < sell_trailing_stop[1] and close[1] < sell_trailing_stop[1]
+        sell_trailing_stop := math.min(sell_trailing_stop[1], close + sell_loss)
+    else if close > sell_trailing_stop[1]
+        sell_trailing_stop := close - sell_loss
+    else
+        sell_trailing_stop := close + sell_loss
+
+if close > sell_trailing_stop[1] and close[1] <= sell_trailing_stop[1]
+    sell_pos := 1
+else if close < sell_trailing_stop[1] and close[1] >= sell_trailing_stop[1]
+    sell_pos := -1
+
+// Only generate "Sell" signals from the Sell-Side UT Bot
+sell_signal_triggered = (sell_pos == -1 and sell_pos[1] == 1)
+
+// ==========================================
+// 3. SCHAFF TREND CYCLE (STC) OSCILLATOR
+// ==========================================
+
+// Custom Stochastic helper function to prevent division-by-zero errors
+f_stc_stoch(src_val, len) =>
+    lowest_val = ta.lowest(src_val, len)
+    highest_val = ta.highest(src_val, len)
+    range_val = highest_val - lowest_val
+    range_val > 0.0 ? 100.0 * (src_val - lowest_val) / range_val : 0.0
+
+// STC Double-Smoothed Stochastic of MACD Main Line
+stc_macd = ta.ema(close, stc_fast_length) - ta.ema(close, stc_slow_length)
+stc_k = f_stc_stoch(stc_macd, stc_cycle_length)
+stc_d = ta.ema(stc_k, stc_d1_length)
+stc_kd = f_stc_stoch(stc_d, stc_cycle_length)
+stc_raw = ta.ema(stc_kd, stc_d2_length)
+
+// Bound STC strictly between 0 and 100
+stc_val = math.max(0.0, math.min(100.0, stc_raw))
+
+// Identify exact STC momentum state, direction, and colors
+stc_upward = stc_val > stc_val[1]
+stc_downward = stc_val < stc_val[1]
+
+stc_color = stc_upward ? color.green : (stc_downward ? color.red : color.gray)
+
+// Identify exact inflection points (direction and color change)
+// Better/cleaner logic for inflection
+stc_bullish_turn = stc_upward and stc_val[1] <= stc_val[2]
+stc_bearish_turn = stc_downward and stc_val[1] >= stc_val[2]
+
+// ==========================================
+// 4. CORE TRADE LOGIC & CONFIRMATION
+// ==========================================
+
+// Long Entry (Buy):
+// Primary: Buy-Side UT Bot triggers "Buy" (300 ATR)
+// Confirmation: STC line is below green threshold (oversold) and actively moving upward (turning from red/flat to green)
+stc_buy_confirmed = stc_val < stc_oversold and stc_bullish_turn
+long_condition = buy_signal_triggered and stc_buy_confirmed
+
+// Short Entry (Sell):
+// Primary: Sell-Side UT Bot triggers "Sell" (1 ATR)
+// Confirmation: STC line is above red threshold (overbought) and actively moving downward (turning from green/flat to red)
+stc_sell_confirmed = stc_val > stc_overbought and stc_bearish_turn
+short_condition = sell_signal_triggered and stc_sell_confirmed
+
+// ==========================================
+// 5. SWING-BASED STOP LOSS & TAKE PROFIT
+// ==========================================
+
+// Find recent swing high and low using lookback period
+swing_low = ta.lowest(low, swing_lookback)
+swing_high = ta.highest(high, swing_lookback)
+
+// State variables to lock entry SL and TP levels
+var float trade_sl = na
+var float trade_tp = na
+
+// When entry condition is met and we are flat, calculate and lock in levels
+if long_condition and strategy.position_size == 0
+    calculated_sl = swing_low * (1.0 - (sl_buffer_pct / 100.0))
+    // Safety check: if swing low is equal to or higher than entry price, use ATR fallback
+    if calculated_sl >= close
+        calculated_sl := close - (ta.atr(14) * 2.0)
+
+    trade_sl := calculated_sl
+    trade_tp := close + (close - trade_sl) * risk_reward_ratio
+
+    strategy.entry("Long", strategy.long)
+
+    // Trigger Long Alert
+    alert_msg = "BUY ALERT: " + syminfo.ticker + " @ " + str.tostring(close) + " | UT Bot 300 ATR Buy + STC Bullish Inflection confirmed (" + str.tostring(stc_val, "#.##") + ")"
+    alert(alert_msg, alert.freq_once_per_bar)
+
+if short_condition and strategy.position_size == 0
+    calculated_sl = swing_high * (1.0 + (sl_buffer_pct / 100.0))
+    // Safety check: if swing high is equal to or lower than entry price, use ATR fallback
+    if calculated_sl <= close
+        calculated_sl := close + (ta.atr(14) * 2.0)
+
+    trade_sl := calculated_sl
+    trade_tp := close - (trade_sl - close) * risk_reward_ratio
+
+    strategy.entry("Short", strategy.short)
+
+    // Trigger Short Alert
+    alert_msg = "SELL ALERT: " + syminfo.ticker + " @ " + str.tostring(close) + " | UT Bot 1 ATR Sell + STC Bearish Inflection confirmed (" + str.tostring(stc_val, "#.##") + ")"
+    alert(alert_msg, alert.freq_once_per_bar)
+
+// Keep the exit order active with locked levels whenever a position is open
+if strategy.position_size > 0
+    strategy.exit("Exit Long", from_entry="Long", stop=trade_sl, limit=trade_tp)
+if strategy.position_size < 0
+    strategy.exit("Exit Short", from_entry="Short", stop=trade_sl, limit=trade_tp)
+
+// Transition from in-position to flat: reset tracking variables
+position_closed = (strategy.position_size[1] != 0 and strategy.position_size == 0)
+if position_closed
+    trade_sl := na
+    trade_tp := na
+
+// ==========================================
+// 6. VISUAL REQUIREMENTS & PLOTS
+// ==========================================
+
+// Plot Trailing Stops for visual inspection (optional, light transparency)
+plot(buy_trailing_stop, title="UT Buy Trailing Stop (300 ATR)", color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr)
+plot(sell_trailing_stop, title="UT Sell Trailing Stop (1 ATR)", color=color.new(color.red, 70), linewidth=1, style=plot.style_linebr)
+
+// Plot Swing High/Low levels
+plot(swing_low, title="Swing Low Lookback", color=color.new(color.blue, 85), linewidth=1, style=plot.style_circles)
+plot(swing_high, title="Swing High Lookback", color=color.new(color.orange, 85), linewidth=1, style=plot.style_circles)
+
+// Plot Active Trade Stop Loss & Take Profit Levels
+plot(trade_sl, title="Active Trade Stop Loss", color=color.new(color.red, 20), linewidth=2, style=plot.style_linebr)
+plot(trade_tp, title="Active Trade Take Profit", color=color.new(color.green, 20), linewidth=2, style=plot.style_linebr)
+
+// Plot Shapes/Labels at Confirmation bars
+plotshape(long_condition, title="BUY Entry Label", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, text="BUY", size=size.normal)
+plotshape(short_condition, title="SELL Entry Label", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, text="SELL", size=size.normal)
+
+// ==========================================
+// 7. PERFORMANCE & MONITORING DASHBOARD
+// ==========================================
+
+var table_pos = position.top_right
+if dashboard_pos == "Bottom Right"
+    table_pos := position.bottom_right
+else if dashboard_pos == "Top Left"
+    table_pos := position.top_left
+else if dashboard_pos == "Bottom Left"
+    table_pos := position.bottom_left
+
+var table info_table = na
+if show_dashboard
+    info_table := table.new(position=table_pos, columns=3, rows=6, border_width=1, border_color=color.gray)
+
+if show_dashboard and barstate.islast
+    // Header Row
+    table.cell(info_table, 0, 0, "SYSTEM MONITOR", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 0, "VALUE / STATUS", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+    table.cell(info_table, 2, 0, "STATE", bgcolor=color.new(color.blue, 30), text_color=color.white, text_size=size.small)
+
+    // Row 1: STC Oscillator
+    stc_state_text = stc_val < stc_oversold ? "Oversold" : (stc_val > stc_overbought ? "Overbought" : "Neutral")
+    stc_state_color = stc_val < stc_oversold ? color.green : (stc_val > stc_overbought ? color.red : color.white)
+    table.cell(info_table, 0, 1, "STC Oscillator", bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 1, str.tostring(stc_val, "#.##"), bgcolor=bg_color_input, text_color=stc_color, text_size=size.small)
+    table.cell(info_table, 2, 1, stc_state_text, bgcolor=bg_color_input, text_color=stc_state_color, text_size=size.small)
+
+    // Row 2: UT Bot Buy (300 ATR)
+    ut_buy_status = close > buy_trailing_stop ? "Bullish" : "Bearish"
+    ut_buy_color = close > buy_trailing_stop ? color.green : color.red
+    table.cell(info_table, 0, 2, "UT Buy (300 ATR)", bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 2, str.tostring(buy_trailing_stop, "#.##"), bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 2, 2, ut_buy_status, bgcolor=bg_color_input, text_color=ut_buy_color, text_size=size.small)
+
+    // Row 3: UT Bot Sell (1 ATR)
+    ut_sell_status = close > sell_trailing_stop ? "Bullish" : "Bearish"
+    ut_sell_color = close > sell_trailing_stop ? color.green : color.red
+    table.cell(info_table, 0, 3, "UT Sell (1 ATR)", bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 3, str.tostring(sell_trailing_stop, "#.##"), bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 2, 3, ut_sell_status, bgcolor=bg_color_input, text_color=ut_sell_color, text_size=size.small)
+
+    // Row 4: Strategy Status
+    strat_pos_text = strategy.position_size > 0 ? "LONG" : (strategy.position_size < 0 ? "SHORT" : "FLAT")
+    strat_pos_color = strategy.position_size > 0 ? color.green : (strategy.position_size < 0 ? color.red : color.gray)
+    table.cell(info_table, 0, 4, "Active Position", bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 4, strat_pos_text, bgcolor=bg_color_input, text_color=strat_pos_color, text_size=size.small)
+    table.cell(info_table, 2, 4, "Avg Entry: " + str.tostring(strategy.position_avg_price, "#.##"), bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+
+    // Row 5: Stats (Net Profit / Win Rate)
+    win_rate = strategy.closed_trades > 0 ? (strategy.winning_trades / strategy.closed_trades) * 100.0 : 0.0
+    table.cell(info_table, 0, 5, "Net Profit / Win Rate", bgcolor=bg_color_input, text_color=color.white, text_size=size.small)
+    table.cell(info_table, 1, 5, str.tostring(strategy.netprofit, "#.##") + " " + syminfo.currency, bgcolor=bg_color_input, text_color=strategy.netprofit >= 0 ? color.green : color.red, text_size=size.small)
+    table.cell(info_table, 2, 5, "WR: " + str.tostring(win_rate, "#.#") + "%", bgcolor=bg_color_input, text_color=win_rate >= 50.0 ? color.green : color.orange, text_size=size.small)
