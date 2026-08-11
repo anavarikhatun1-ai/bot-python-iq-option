@@ -523,10 +523,6 @@ if showDashboard
 _regStr = regimeTrendSmooth ? "TREND" : regimeRangeSmooth ? "RANGE" : "TRANS"
 _expMsg = _isExpiryDay ? " [EXPIRY]" : ""
 
-alertcondition(longSignal,
-    title="LONG Signal",
-    message="LONG|{{ticker}}|qty:" + str.tostring(qty) + "|entry:" + str.tostring(close) + "|SL:" + str.tostring(longSL) + "|TP:" + str.tostring(longTP) + "|score:" + str.tostring(math.round(scoreLong, 1)) + "|regime:" + _regStr + "|session:" + sessionMode + _expMsg)
+alertcondition(longSignal, title="LONG Signal", message="LONG|{{ticker}}|qty:" + str.tostring(qty) + "|entry:" + str.tostring(close) + "|SL:" + str.tostring(longSL) + "|TP:" + str.tostring(longTP) + "|score:" + str.tostring(math.round(scoreLong, 1)) + "|regime:" + _regStr + "|session:" + sessionMode + _expMsg)
 
-alertcondition(shortSignal,
-    title="SHORT Signal",
-    message="SHORT|{{ticker}}|qty:" + str.tostring(qty) + "|entry:" + str.tostring(close) + "|SL:" + str.tostring(shortSL) + "|TP:" + str.tostring(shortTP) + "|score:" + str.tostring(math.round(scoreShort, 1)) + "|regime:" + _regStr + "|session:" + sessionMode + _expMsg)
+alertcondition(shortSignal, title="SHORT Signal", message="SHORT|{{ticker}}|qty:" + str.tostring(qty) + "|entry:" + str.tostring(close) + "|SL:" + str.tostring(shortSL) + "|TP:" + str.tostring(shortTP) + "|score:" + str.tostring(math.round(scoreShort, 1)) + "|regime:" + _regStr + "|session:" + sessionMode + _expMsg)
