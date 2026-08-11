@@ -2,9 +2,9 @@
 strategy("Multi-Session Breakout & Volatility Regime Strategy",
          overlay=true,
          initial_capital=100000,
-         default_qty_type=strategy.cash,
-         default_qty_value=100000,
-         currency=currency.USD,
+         default_qty_type=strategy.percent_of_equity,
+         default_qty_value=100,
+         currency="USD",
          slippage=2,
          commission_type=strategy.commission.percent,
          commission_value=0.002)
@@ -210,11 +210,11 @@ trade_size := math.min(trade_size, max_trade_size_units)
 // Execute entries
 if long_condition and trade_size > 0
     strategy.entry("Long Breakout", strategy.long, qty=trade_size)
-    alert("LONG Breakout Entry Triggered! Symbol: " + syminfo.ticker + " Price: " + str.tostring(close), alert.freq_once_per_bar)
+    alert("LONG Breakout Entry Triggered! Symbol: " + syminfo.ticker + " Price: " + str.tostring(close))
 
 if short_condition and trade_size > 0
     strategy.entry("Short Breakout", strategy.short, qty=trade_size)
-    alert("SHORT Breakout Entry Triggered! Symbol: " + syminfo.ticker + " Price: " + str.tostring(close), alert.freq_once_per_bar)
+    alert("SHORT Breakout Entry Triggered! Symbol: " + syminfo.ticker + " Price: " + str.tostring(close))
 
 // Monitor entry and capture fixed levels based on actual fill price
 bool was_flat = strategy.position_size[1] == 0
@@ -308,12 +308,12 @@ var table dashboard = table.new(position.top_right, 6, 2)
 
 if barstate.islast
     // Header Row
-    table.cell(dashboard, 0, 0, "Daily PnL", bgcolor=color.darkgray, text_color=color.white)
-    table.cell(dashboard, 1, 0, "Trades Today", bgcolor=color.darkgray, text_color=color.white)
-    table.cell(dashboard, 2, 0, "ATR Volatility", bgcolor=color.darkgray, text_color=color.white)
-    table.cell(dashboard, 3, 0, "Regime", bgcolor=color.darkgray, text_color=color.white)
-    table.cell(dashboard, 4, 0, "Win Rate", bgcolor=color.darkgray, text_color=color.white)
-    table.cell(dashboard, 5, 0, "Closed Trades", bgcolor=color.darkgray, text_color=color.white)
+    table.cell(dashboard, 0, 0, "Daily PnL", bgcolor=color.gray, text_color=color.white)
+    table.cell(dashboard, 1, 0, "Trades Today", bgcolor=color.gray, text_color=color.white)
+    table.cell(dashboard, 2, 0, "ATR Volatility", bgcolor=color.gray, text_color=color.white)
+    table.cell(dashboard, 3, 0, "Regime", bgcolor=color.gray, text_color=color.white)
+    table.cell(dashboard, 4, 0, "Win Rate", bgcolor=color.gray, text_color=color.white)
+    table.cell(dashboard, 5, 0, "Closed Trades", bgcolor=color.gray, text_color=color.white)
 
     // Values Row
     color pnl_color = day_closed_profit >= 0 ? color.green : color.red
