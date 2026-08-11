@@ -1,0 +1,332 @@
+//@version=5
+strategy("Multi-Session Breakout & Volatility Regime Strategy",
+         overlay=true,
+         initial_capital=100000,
+         default_qty_type=strategy.cash,
+         default_qty_value=100000,
+         currency=currency.USD,
+         slippage=2,
+         commission_type=strategy.commission.percent,
+         commission_value=0.002)
+
+// ==========================================
+// 1. INPUTS & CONFIGURATION
+// ==========================================
+
+// Timezone & Sessions
+string gmt_timezone = input.string("UTC", title="Session Timezone", tooltip="Define timezone for session times (e.g., UTC, America/New_York, Europe/London)")
+string tokyo_session_time = input.session("0000-0800:1234567", title="Tokyo Session Range Time", tooltip="Tokyo session time window to define the range boundaries. Best run on 5m, 15m, or 30m charts.")
+string trade_session_time = input.session("0800-1800:1234567", title="Trade Entry Window", tooltip="Allowed time window to enter trades (e.g., London and NY overlap)")
+
+// Volatility Filter (ATR)
+int atr_length = input.int(14, title="ATR Length", group="Volatility Filter")
+int atr_ma_length = input.int(100, title="ATR MA Length", group="Volatility Filter")
+float atr_mult = input.float(1.0, title="ATR Volatility Multiplier", tooltip="ATR must be greater than this multiplier of its MA", group="Volatility Filter")
+
+// Momentum Filter (Volume-Weighted Momentum Proxy)
+int fast_len = input.int(12, title="Momentum Fast Length", group="Momentum Filter")
+int slow_len = input.int(26, title="Momentum Slow Length", group="Momentum Filter")
+int sig_len = input.int(9, title="Momentum Signal Length", group="Momentum Filter")
+
+// Long-Term Trend Filter
+bool use_trend_filter = input.bool(true, title="Use Trend Filter (EMA 200)", tooltip="Only buy if price is above 200 EMA, and sell if below", group="Trend Filter")
+int trend_ema_length = input.int(200, title="Trend EMA Length", group="Trend Filter")
+
+// Trade Execution Limits
+int max_trades_per_day = input.int(1, title="Max Trades Per Day", minval=1, group="Execution Limits")
+float max_daily_loss_percent = input.float(1.5, title="Max Daily Loss Limit (%)", tooltip="Stops trading for the day if closed losses exceed this % of starting equity", group="Execution Limits")
+
+// Position Sizing & Leverage
+float risk_percent = input.float(1.0, title="Risk Per Trade (%)", minval=0.1, maxval=10.0, step=0.1, tooltip="Percentage of current equity to risk per trade", group="Risk & Position Sizing")
+float max_leverage = input.float(10.0, title="Maximum Allowed Leverage", tooltip="Max trade size in terms of Account Equity multiple", group="Risk & Position Sizing")
+
+// Exit Methods
+string sl_style = input.string("ATR-based", title="Stop Loss Method", options=["ATR-based", "Tokyo Range Opposite", "Recent Swing"], group="Exit Parameters")
+int swing_length = input.int(10, title="Swing SL Candle Lookback", tooltip="Used if Stop Loss Method is Recent Swing", group="Exit Parameters")
+float sl_atr_mult = input.float(1.5, title="SL ATR Multiplier", tooltip="Used if Stop Loss Method is ATR-based", group="Exit Parameters")
+
+string tp_style = input.string("Risk-to-Reward", title="Take Profit Method", options=["Risk-to-Reward", "ATR-based", "Tokyo Range Projection"], group="Exit Parameters")
+float tp_rr_mult = input.float(2.0, title="Risk-to-Reward Ratio", tooltip="Used if TP Method is Risk-to-Reward", group="Exit Parameters")
+float tp_atr_mult = input.float(3.0, title="TP ATR Multiplier", tooltip="Used if TP Method is ATR-based", group="Exit Parameters")
+float tp_range_mult = input.float(1.0, title="Tokyo Range Projection Mult", tooltip="Used if TP Method is Tokyo Range Projection. Projects range height from the breakout point.", group="Exit Parameters")
+
+bool use_trailing_stop = input.bool(false, title="Use Trailing Stop", tooltip="Enable dynamic trailing stop loss based on ATR", group="Exit Parameters")
+float trailing_atr_mult = input.float(2.0, title="Trailing ATR Multiplier", tooltip="Distance from high/low to trail the stop loss", group="Exit Parameters")
+
+// ==========================================
+// 2. STATE VARIABLE INITIALIZATION
+// ==========================================
+
+// Day tracking using dayofmonth(time, timezone) to handle timezone-aware day changes correctly in Pine Script v5
+bool is_new_day = false
+var int last_day_val = na
+int current_day_val = dayofmonth(time, gmt_timezone)
+
+if not na(current_day_val)
+    if na(last_day_val) or current_day_val != last_day_val
+        is_new_day := true
+        last_day_val := current_day_val
+
+// Daily limits tracking
+var int trades_today = 0
+var float day_closed_profit = 0.0
+var float starting_equity = 100000.0
+
+if is_new_day
+    trades_today := 0
+    day_closed_profit := 0.0
+    starting_equity := strategy.equity
+
+// Accumulate daily closed profit/loss safely. Loop through newly closed trades to handle cases where multiple trades close on the same bar.
+var int last_closed_count = 0
+if strategy.closedtrades > last_closed_count
+    int closed_this_bar = strategy.closedtrades - last_closed_count
+    for i = 0 to closed_this_bar - 1
+        float profit_val = strategy.closedtrades.profit(strategy.closedtrades - 1 - i)
+        day_closed_profit := day_closed_profit + profit_val
+    last_closed_count := strategy.closedtrades
+
+// Daily loss check
+bool daily_loss_ok = true
+if starting_equity > 0
+    if day_closed_profit < 0 and math.abs(day_closed_profit) > (starting_equity * (max_daily_loss_percent / 100.0))
+        daily_loss_ok := false
+
+bool can_trade = (trades_today < max_trades_per_day) and daily_loss_ok
+
+// Tokyo Session Tracking
+var float tokyo_high = na
+var float tokyo_low = na
+bool in_tokyo_session = not na(time(timeframe.period, tokyo_session_time, gmt_timezone))
+bool is_new_tokyo = in_tokyo_session and not in_tokyo_session[1]
+
+if is_new_tokyo
+    tokyo_high := high
+    tokyo_low := low
+else if in_tokyo_session
+    tokyo_high := math.max(tokyo_high, high)
+    tokyo_low := math.min(tokyo_low, low)
+
+// Trading Session Window
+bool in_trade_window = not na(time(timeframe.period, trade_session_time, gmt_timezone))
+
+// ==========================================
+// 3. INDICATORS & FILTERS (GLOBAL SCOPE)
+// ==========================================
+
+// Volatility Calculation (ATR)
+float current_atr = ta.atr(atr_length)
+float atr_ma = ta.sma(current_atr, atr_ma_length)
+bool volatility_ok = current_atr > (atr_ma * atr_mult)
+
+// Trend Filter
+float trend_ema = ta.ema(close, trend_ema_length)
+bool trend_bullish = not use_trend_filter or close > trend_ema
+bool trend_bearish = not use_trend_filter or close < trend_ema
+
+// Price/Volume-Derived Momentum Proxy (VW-MACD)
+// To prevent internal indicator history desynchronization inside conditional blocks,
+// we compute the indicators in the global scope first, and then perform the fallback selection.
+bool has_volume = not na(volume) and volume > 0
+float temp_vwma_fast = ta.vwma(close, fast_len)
+float temp_ema_fast = ta.ema(close, fast_len)
+float fast_vwma = has_volume and not na(temp_vwma_fast) ? temp_vwma_fast : temp_ema_fast
+
+float temp_vwma_slow = ta.vwma(close, slow_len)
+float temp_ema_slow = ta.ema(close, slow_len)
+float slow_vwma = has_volume and not na(temp_vwma_slow) ? temp_vwma_slow : temp_ema_slow
+
+float vw_macd = fast_vwma - slow_vwma
+float vw_signal = ta.ema(vw_macd, sig_len)
+float vw_hist = vw_macd - vw_signal
+
+bool momentum_bullish = vw_hist > 0
+bool momentum_bearish = vw_hist < 0
+
+// Swing levels (Must be evaluated globally outside if-blocks)
+float swing_low_val = ta.lowest(low, swing_length)
+float swing_high_val = ta.highest(high, swing_length)
+
+// ==========================================
+// 4. SIGNAL GENERATION
+// ==========================================
+
+// Confirm breakouts on candle closes to avoid repainting
+bool buy_trigger = close[1] <= tokyo_high[1] and close > tokyo_high
+bool sell_trigger = close[1] >= tokyo_low[1] and close < tokyo_low
+
+bool long_condition = buy_trigger and in_trade_window and volatility_ok and momentum_bullish and can_trade and strategy.position_size == 0 and trend_bullish
+bool short_condition = sell_trigger and in_trade_window and volatility_ok and momentum_bearish and can_trade and strategy.position_size == 0 and trend_bearish
+
+// ==========================================
+// 5. TRADE EXECUTION & STOP/TARGET CALCULATION
+// ==========================================
+
+// Keep track of active Stop Loss, Take Profit, and Trailing Levels
+var float entry_sl = na
+var float entry_tp = na
+var float trailing_sl = na
+
+// Temporary variables for calculations on trigger bar
+float current_sl_long = na
+float current_sl_short = na
+
+if sl_style == "ATR-based"
+    current_sl_long := close - (current_atr * sl_atr_mult)
+    current_sl_short := close + (current_atr * sl_atr_mult)
+else if sl_style == "Tokyo Range Opposite"
+    current_sl_long := tokyo_low
+    current_sl_short := tokyo_high
+else // Recent Swing
+    current_sl_long := swing_low_val
+    current_sl_short := swing_high_val
+
+// Explicit SL State Capture on Trigger Bar to prevent implicit history tracking issues
+var float captured_sl_long = na
+var float captured_sl_short = na
+
+if long_condition
+    captured_sl_long := current_sl_long
+if short_condition
+    captured_sl_short := current_sl_short
+
+// Calculate dynamic position size based on SL distance
+float trade_size = 0.0
+if long_condition
+    float sl_distance = close - current_sl_long
+    if sl_distance > 0
+        float risk_amount = strategy.equity * (risk_percent / 100.0)
+        trade_size := risk_amount / (sl_distance * syminfo.pointvalue)
+else if short_condition
+    float sl_distance = current_sl_short - close
+    if sl_distance > 0
+        float risk_amount = strategy.equity * (risk_percent / 100.0)
+        trade_size := risk_amount / (sl_distance * syminfo.pointvalue)
+
+// Limit size to max allowed leverage
+float max_trade_size_units = (strategy.equity * max_leverage) / close
+trade_size := math.min(trade_size, max_trade_size_units)
+
+// Execute entries
+if long_condition and trade_size > 0
+    strategy.entry("Long Breakout", strategy.long, qty=trade_size)
+    alert("LONG Breakout Entry Triggered! Symbol: " + syminfo.ticker + " Price: " + str.tostring(close), alert.freq_once_per_bar)
+
+if short_condition and trade_size > 0
+    strategy.entry("Short Breakout", strategy.short, qty=trade_size)
+    alert("SHORT Breakout Entry Triggered! Symbol: " + syminfo.ticker + " Price: " + str.tostring(close), alert.freq_once_per_bar)
+
+// Monitor entry and capture fixed levels based on actual fill price
+bool was_flat = strategy.position_size[1] == 0
+bool now_in_position = strategy.position_size != 0
+
+if now_in_position and was_flat
+    float entry_price = strategy.position_avg_price
+    if strategy.position_size > 0
+        entry_sl := captured_sl_long
+        if tp_style == "Risk-to-Reward"
+            float sl_dist = entry_price - entry_sl
+            entry_tp := entry_price + (sl_dist * tp_rr_mult)
+        else if tp_style == "ATR-based"
+            entry_tp := entry_price + (current_atr[1] * tp_atr_mult)
+        else // Tokyo Range Projection
+            float range_height = tokyo_high[1] - tokyo_low[1]
+            entry_tp := entry_price + (range_height * tp_range_mult)
+    else if strategy.position_size < 0
+        entry_sl := captured_sl_short
+        if tp_style == "Risk-to-Reward"
+            float sl_dist = entry_sl - entry_price
+            entry_tp := entry_price - (sl_dist * tp_rr_mult)
+        else if tp_style == "ATR-based"
+            entry_tp := entry_price - (current_atr[1] * tp_atr_mult)
+        else // Tokyo Range Projection
+            float range_height = tokyo_high[1] - tokyo_low[1]
+            entry_tp := entry_price - (range_height * tp_range_mult)
+
+// Manage Trailing Stop logic
+if strategy.position_size > 0
+    if use_trailing_stop
+        float trail_level = high - (current_atr * trailing_atr_mult)
+        if na(trailing_sl)
+            trailing_sl := math.max(entry_sl, trail_level)
+        else
+            trailing_sl := math.max(trailing_sl, trail_level)
+    else
+        trailing_sl := entry_sl
+else if strategy.position_size < 0
+    if use_trailing_stop
+        float trail_level = low + (current_atr * trailing_atr_mult)
+        if na(trailing_sl)
+            trailing_sl := math.min(entry_sl, trail_level)
+        else
+            trailing_sl := math.min(trailing_sl, trail_level)
+    else
+        trailing_sl := entry_sl
+
+// Apply stop loss and take profit exits
+if strategy.position_size > 0
+    strategy.exit("Exit Long", "Long Breakout", stop=trailing_sl, limit=entry_tp)
+else if strategy.position_size < 0
+    strategy.exit("Exit Short", "Short Breakout", stop=trailing_sl, limit=entry_tp)
+
+// Increment trades today on dynamic entry detection
+bool position_opened = (strategy.position_size[1] == 0 and strategy.position_size != 0)
+if position_opened
+    trades_today := trades_today + 1
+
+// Reset variables when flat
+bool position_closed = (strategy.position_size[1] != 0 and strategy.position_size == 0)
+if position_closed
+    entry_sl := na
+    entry_tp := na
+    trailing_sl := na
+
+// ==========================================
+// 6. VISUALIZATION & CHARTS
+// ==========================================
+
+// Color-coded sessions
+color tokyo_color = in_tokyo_session ? color.new(color.blue, 96) : na
+bgcolor(tokyo_color, title="Tokyo Session Background")
+
+// Plot Boundaries (Avoid continuous horizontal line leakage by using linebr)
+plot(in_tokyo_session or in_trade_window ? tokyo_high : na, title="Tokyo Range High", color=color.blue, style=plot.style_linebr, linewidth=2)
+plot(in_tokyo_session or in_trade_window ? tokyo_low : na, title="Tokyo Range Low", color=color.orange, style=plot.style_linebr, linewidth=2)
+
+// Plot Trend EMA
+plot(use_trend_filter ? trend_ema : na, title="Trend EMA", color=color.purple, linewidth=1, style=plot.style_dotted)
+
+// Plot Active Trade Stops/Targets
+plot(strategy.position_size != 0 ? trailing_sl : na, title="Active Stop Loss", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size != 0 ? entry_tp : na, title="Active Take Profit", color=color.green, style=plot.style_linebr, linewidth=2)
+
+// ==========================================
+// 7. REAL-TIME DASHBOARD
+// ==========================================
+
+var table dashboard = table.new(position.top_right, 6, 2)
+
+if barstate.islast
+    // Header Row
+    table.cell(dashboard, 0, 0, "Daily PnL", bgcolor=color.darkgray, text_color=color.white)
+    table.cell(dashboard, 1, 0, "Trades Today", bgcolor=color.darkgray, text_color=color.white)
+    table.cell(dashboard, 2, 0, "ATR Volatility", bgcolor=color.darkgray, text_color=color.white)
+    table.cell(dashboard, 3, 0, "Regime", bgcolor=color.darkgray, text_color=color.white)
+    table.cell(dashboard, 4, 0, "Win Rate", bgcolor=color.darkgray, text_color=color.white)
+    table.cell(dashboard, 5, 0, "Closed Trades", bgcolor=color.darkgray, text_color=color.white)
+
+    // Values Row
+    color pnl_color = day_closed_profit >= 0 ? color.green : color.red
+    table.cell(dashboard, 0, 1, "$" + str.tostring(day_closed_profit, "#.##"), bgcolor=color.new(pnl_color, 85), text_color=pnl_color)
+    table.cell(dashboard, 1, 1, str.tostring(trades_today) + " / " + str.tostring(max_trades_per_day), bgcolor=color.new(color.blue, 85), text_color=color.blue)
+    table.cell(dashboard, 2, 1, str.tostring(current_atr, "#.#####"), bgcolor=color.new(color.purple, 85), text_color=color.purple)
+
+    string regime_str = volatility_ok ? "High Vol" : "Low Vol"
+    color regime_color = volatility_ok ? color.green : color.orange
+    table.cell(dashboard, 3, 1, regime_str, bgcolor=color.new(regime_color, 85), text_color=regime_color)
+
+    float win_rate = 0.0
+    if strategy.closedtrades > 0
+        win_rate := (strategy.wintrades / strategy.closedtrades) * 100.0
+    table.cell(dashboard, 4, 1, str.tostring(win_rate, "#.##") + "%", bgcolor=color.new(color.teal, 85), text_color=color.teal)
+    table.cell(dashboard, 5, 1, str.tostring(strategy.closedtrades), bgcolor=color.new(color.navy, 85), text_color=color.navy)
