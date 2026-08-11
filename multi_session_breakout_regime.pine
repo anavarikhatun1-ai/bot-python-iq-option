@@ -57,10 +57,10 @@ float trailing_atr_mult = input.float(2.0, title="Trailing ATR Multiplier", tool
 // 2. STATE VARIABLE INITIALIZATION
 // ==========================================
 
-// Day tracking (Using correct time() overload to handle daily timezone shifts without compilation errors)
+// Day tracking using dayofmonth(time, timezone) to handle timezone-aware day changes correctly in Pine Script v5
 bool is_new_day = false
 var int last_day_val = na
-int current_day_val = time("D", gmt_timezone)
+int current_day_val = dayofmonth(time, gmt_timezone)
 
 if not na(current_day_val)
     if na(last_day_val) or current_day_val != last_day_val
