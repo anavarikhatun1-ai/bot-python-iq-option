@@ -1,0 +1,183 @@
+// =============================================================================
+// UT Bot + STC Scalper — Modified Edition
+// Base concept: ATR trailing-stop signal (UT Bot style) + Schaff Trend Cycle
+//               confirmation filter, as described by the user.
+// Modifications added on top of the base idea to address known weaknesses:
+//   1. EMA200 regime filter        -> only trade with the higher-order trend
+//   2. ADX strength filter         -> skip trades when the market is ranging
+//   3. ATR-based SL/TP             -> stops scale with real volatility instead
+//                                      of arbitrary swing points
+//   4. Session filter              -> only trade London/NY hours (adjustable)
+//   5. Loss-cooldown + daily cap   -> stops the bot from "revenge trading"
+//                                      through a choppy stretch (this is the
+//                                      "human discipline" layer)
+// =============================================================================
+
+//@version=5
+strategy("UT Bot + STC Scalper v2 (Modified)", overlay=true,
+     default_qty_type=strategy.percent_of_equity, default_qty_value=1,
+     initial_capital=10000, commission_type=strategy.commission.percent,
+     commission_value=0.03, slippage=2)
+
+// ---------------------------------------------------------------------------
+// INPUTS
+// ---------------------------------------------------------------------------
+grpUT = "UT Bot (ATR Trailing Stop)"
+keyValue   = input.float(2.0, "Key Value (Sensitivity)", minval=0.1, step=0.1, group=grpUT)
+atrPeriod  = input.int(3, "ATR Period", minval=1, group=grpUT,
+     tooltip="Original video used 1, which is extremely noisy. Default raised to 3 for fewer false flips.")
+
+grpSTC = "Schaff Trend Cycle"
+stcLength = input.int(10, "STC Length", group=grpSTC)
+stcFast   = input.int(23, "STC Fast Length", group=grpSTC)
+stcSlow   = input.int(50, "STC Slow Length", group=grpSTC)
+stcOB     = input.int(80, "STC Overbought", group=grpSTC)
+stcOS     = input.int(20, "STC Oversold", group=grpSTC)
+
+grpTrend = "Trend / Regime Filter (new)"
+useEmaFilter = input.bool(true, "Require price above/below EMA200", group=grpTrend)
+emaLen        = input.int(200, "EMA Length", group=grpTrend)
+useAdxFilter  = input.bool(true, "Require ADX trend strength", group=grpTrend)
+adxLen        = input.int(14, "ADX Length", group=grpTrend)
+adxThreshold  = input.float(20.0, "Min ADX to allow entries", group=grpTrend,
+     tooltip="Blocks entries in ranging/chop conditions, which was the strategy's stated weakness.")
+
+grpSession = "Session Filter (new)"
+useSession = input.bool(true, "Restrict trading to session window", group=grpSession)
+sessionWindow = input.session("0700-1700", "Session (exchange time)", group=grpSession,
+     tooltip="Default approximates London/NY overlap. Adjust to your broker's timezone.")
+
+grpRisk = "Risk Management (modified)"
+atrSlMult  = input.float(1.5, "Stop Loss = ATR x", minval=0.1, step=0.1, group=grpRisk,
+     tooltip="Replaces the fixed 'last 2-3 candle swing' stop with a volatility-scaled stop.")
+rrRatio    = input.float(1.5, "Reward:Risk Ratio", minval=0.5, step=0.1, group=grpRisk)
+useStcExit = input.bool(true, "Exit early if STC flips against position", group=grpRisk)
+
+grpDiscipline = "Trading Discipline / 'Human' Layer (new)"
+maxTradesPerDay = input.int(4, "Max trades per day", minval=1, group=grpDiscipline)
+cooldownBars    = input.int(6, "Cooldown bars after a loss", minval=0, group=grpDiscipline,
+     tooltip="Pause new entries for N bars after a losing trade, instead of immediately re-entering into chop.")
+
+// ---------------------------------------------------------------------------
+// UT BOT LOGIC (ATR trailing stop flip system)
+// ---------------------------------------------------------------------------
+atrVal = ta.atr(atrPeriod)
+nLoss  = keyValue * atrVal
+
+src = close
+var float trailingStop = na
+trailingStop := if src > nz(trailingStop[1], src) and src[1] > nz(trailingStop[1], src)
+    math.max(nz(trailingStop[1]), src - nLoss)
+  else if src < nz(trailingStop[1], src) and src[1] < nz(trailingStop[1], src)
+    math.min(nz(trailingStop[1]), src + nLoss)
+  else if src > nz(trailingStop[1], src)
+    src - nLoss
+  else
+    src + nLoss
+
+above = ta.crossover(src, trailingStop)
+below = ta.crossunder(src, trailingStop)
+
+utBuySignal  = src > trailingStop and above
+utSellSignal = src < trailingStop and below
+
+// ---------------------------------------------------------------------------
+// SCHAFF TREND CYCLE
+// ---------------------------------------------------------------------------
+stcMacd = ta.ema(close, stcFast) - ta.ema(close, stcSlow)
+
+var float stcF1 = na
+lowestMacd  = ta.lowest(stcMacd, stcLength)
+highestMacd = ta.highest(stcMacd, stcLength) - lowestMacd
+stcF1 := highestMacd > 0 ? (stcMacd - lowestMacd) / highestMacd * 100 : nz(stcF1[1])
+
+var float pf = na
+pf := na(pf[1]) ? stcF1 : pf[1] + 0.5 * (stcF1 - pf[1])
+
+lowestPf  = ta.lowest(pf, stcLength)
+highestPf = ta.highest(pf, stcLength) - lowestPf
+var float stcF2 = na
+stcF2 := highestPf > 0 ? (pf - lowestPf) / highestPf * 100 : nz(stcF2[1])
+
+var float stc = na
+stc := na(stc[1]) ? stcF2 : stc[1] + 0.5 * (stcF2 - stc[1])
+stc := math.max(0, math.min(100, stc))
+
+stcRising  = stc > stc[1]
+stcFalling = stc < stc[1]
+stcColorGreen = stcRising
+stcColorRed   = stcFalling
+
+// ---------------------------------------------------------------------------
+// TREND / REGIME FILTERS
+// ---------------------------------------------------------------------------
+ema200 = ta.ema(close, emaLen)
+trendUpOk   = not useEmaFilter or close > ema200
+trendDownOk = not useEmaFilter or close < ema200
+
+[diplus, diminus, adxVal] = ta.dmi(adxLen, adxLen)
+adxOk = not useAdxFilter or adxVal >= adxThreshold
+
+inSession = not useSession or not na(time(timeframe.period, sessionWindow))
+
+// ---------------------------------------------------------------------------
+// DISCIPLINE LAYER: daily trade cap + post-loss cooldown
+// ---------------------------------------------------------------------------
+var int tradesToday = 0
+var int lastTradeDay = na
+todayIsNewDay = na(lastTradeDay) or dayofmonth != lastTradeDay
+if todayIsNewDay
+    tradesToday := 0
+    lastTradeDay := dayofmonth
+
+var int barsSinceLoss = 1000000
+if ta.change(strategy.closedtrades) > 0 and strategy.closedtrades > 0
+    lastTradeProfit = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if lastTradeProfit < 0
+        barsSinceLoss := 0
+barsSinceLoss := barsSinceLoss + 1
+
+cooldownOk   = barsSinceLoss >= cooldownBars
+dailyCapOk   = tradesToday < maxTradesPerDay
+
+// ---------------------------------------------------------------------------
+// ENTRY CONDITIONS
+// ---------------------------------------------------------------------------
+longCondition  = utBuySignal  and stcColorGreen and trendUpOk   and adxOk and inSession and cooldownOk and dailyCapOk
+shortCondition = utSellSignal and stcColorRed   and trendDownOk and adxOk and inSession and cooldownOk and dailyCapOk
+
+// ATR-based SL/TP (replaces the fixed swing-high/low approach)
+longSL  = close - atrVal * atrSlMult
+longTP  = close + (close - longSL) * rrRatio
+shortSL = close + atrVal * atrSlMult
+shortTP = close - (shortSL - close) * rrRatio
+
+if longCondition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=longSL, limit=longTP)
+    tradesToday := tradesToday + 1
+    alert("Long entry: UT Bot + STC + trend/ADX/session filters aligned", alert.freq_once_per_bar_close)
+
+if shortCondition and strategy.position_size == 0
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=shortSL, limit=shortTP)
+    tradesToday := tradesToday + 1
+    alert("Short entry: UT Bot + STC + trend/ADX/session filters aligned", alert.freq_once_per_bar_close)
+
+// Optional early exit if STC flips against an open position
+if useStcExit
+    if strategy.position_size > 0 and stcColorRed
+        strategy.close("Long", comment="STC flip exit")
+    if strategy.position_size < 0 and stcColorGreen
+        strategy.close("Short", comment="STC flip exit")
+
+// ---------------------------------------------------------------------------
+// PLOTTING
+// ---------------------------------------------------------------------------
+plot(trailingStop, "UT Bot Trailing Stop", color=src > trailingStop ? color.new(color.green, 0) : color.new(color.red, 0), style=plot.style_linebr)
+plot(ema200, "EMA200", color=color.new(color.blue, 40))
+plotshape(longCondition, title="Buy", location=location.belowbar, style=shape.labelup, size=size.tiny, color=color.green, text="BUY", textcolor=color.white)
+plotshape(shortCondition, title="Sell", location=location.abovebar, style=shape.labeldown, size=size.tiny, color=color.red, text="SELL", textcolor=color.white)
+
+hline(stcOB, "STC OB", color=color.new(color.gray, 60))
+hline(stcOS, "STC OS", color=color.new(color.gray, 60))
