@@ -66,14 +66,7 @@ nLoss  = keyValue * atrVal
 
 src = close
 var float trailingStop = na
-trailingStop := if src > nz(trailingStop[1], src) and src[1] > nz(trailingStop[1], src)
-    math.max(nz(trailingStop[1]), src - nLoss)
-  else if src < nz(trailingStop[1], src) and src[1] < nz(trailingStop[1], src)
-    math.min(nz(trailingStop[1]), src + nLoss)
-  else if src > nz(trailingStop[1], src)
-    src - nLoss
-  else
-    src + nLoss
+trailingStop := src > nz(trailingStop[1], src) and src[1] > nz(trailingStop[1], src) ? math.max(nz(trailingStop[1]), src - nLoss) : src < nz(trailingStop[1], src) and src[1] < nz(trailingStop[1], src) ? math.min(nz(trailingStop[1]), src + nLoss) : src > nz(trailingStop[1], src) ? src - nLoss : src + nLoss
 
 above = ta.crossover(src, trailingStop)
 below = ta.crossunder(src, trailingStop)
