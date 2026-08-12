@@ -289,8 +289,8 @@ a_line_cross(a__check_value, a__start_time, a__start_price, a__slope, a__log_cha
 
 
 // Calculate pivot points
-a_high_point = ta.pivothigh(a_Wicks == 'Wicks' ? high : close > open ? close : open, a_len, a_len / 2)
-a_low_point = ta.pivotlow(a_Wicks == 'Wicks' ? low : close > open ? open : close, a_len, a_len / 2)
+a_high_point = ta.pivothigh(a_Wicks == 'Wicks' ? high : close > open ? close : open, a_len, int(a_len / 2))
+a_low_point = ta.pivotlow(a_Wicks == 'Wicks' ? low : close > open ? open : close, a_len, int(a_len / 2))
 
 // --- SMC: Inlined Primary High Trendline Calculation ---
 var int a_high_Ax = 1
@@ -600,8 +600,8 @@ b_line_cross(b__check_value, b__start_time, b__start_price, b__slope, b__log_cha
     b_cross
 
 // Calculate pivot points
-b_high_point = ta.pivothigh(b_Wicks == 'Wicks' ? high : close > open ? close : open, b_len, b_len / 2)
-b_low_point = ta.pivotlow(b_Wicks == 'Wicks' ? low : close > open ? open : close, b_len, b_len / 2)
+b_high_point = ta.pivothigh(b_Wicks == 'Wicks' ? high : close > open ? close : open, b_len, int(b_len / 2))
+b_low_point = ta.pivotlow(b_Wicks == 'Wicks' ? low : close > open ? open : close, b_len, int(b_len / 2))
 
 // --- SMC: Inlined Secondary High Trendline Calculation ---
 var int b_high_Ax = 1
@@ -1543,8 +1543,8 @@ FPeriod = timeframe.isintraday and Foption == '2. Days' ? 1440 / timeframe.multi
 
 Fhigh = FIBS == 1 ? ta.highest(high, int(FPeriod)) : FIBS == 2 and High == 0 ? ta.highest(high, 100) : FIBS == 2 and High != 0 ? High : na
 Flow = FIBS == 1 ? ta.lowest(low, int(FPeriod)) : FIBS == 2 and Low == -1 ? ta.lowest(low, 100) : FIBS == 2 and High != -1 ? Low : na
-FH = FIBS == 1 ? ta.highestbars(high, FPeriod) : 1
-FL = FIBS == 1 ? ta.lowestbars(low, FPeriod) : 2
+FH = FIBS == 1 ? ta.highestbars(high, int(FPeriod)) : 1
+FL = FIBS == 1 ? ta.lowestbars(low, int(FPeriod)) : 2
 revfibs = not Reverse ? FL > FH : FL < FH
 
 
@@ -1570,73 +1570,95 @@ WIDTH = LineWidth
 
 BB = FIBS == 1 ? FL < FH ? bar_index[-FL] : bar_index[-FH] : FIBS == 2 ? bar_index[50] : bar_index[50]
 
-Fib_line(x) =>
-    var line ln = na
+Fib_line(x, ln) =>
     line.delete(ln)
-    ln := line.new(BB, x, bar_index, x, color=close > x ? BullColor : BearColor, extend=EXTEND, style=STYLE, width=WIDTH)
-    ln
+    line.new(BB, x, bar_index, x, color=close > x ? BullColor : BearColor, extend=EXTEND, style=STYLE, width=WIDTH)
 
-
-
-Fib_label(x, _txt) =>
-    var label lbl = na
+Fib_label(x, _txt, lbl) =>
     label.delete(lbl)
-    lbl := label.new(bar_index, x, _txt + str.tostring(x, '##.########') + ' )', textcolor=close > x ? BullColor : BearColor, color=color.new(#000000, 100), style=label.style_label_left, yloc=yloc.price)
-    lbl
+    label.new(bar_index, x, _txt + str.tostring(x, '##.########') + ' )', textcolor=close > x ? BullColor : BearColor, color=color.new(#000000, 100), style=label.style_label_left, yloc=yloc.price)
 
+var line Fib0 = na
+var line Fib236 = na
+var line Fib382 = na
+var line Fib500 = na
+var line Fib618 = na
+var line Fib786 = na
+var line Fib1000 = na
+var line Fib886 = na
+var line Fib1113 = na
+var line Fib1272 = na
+var line Fib1618 = na
+var line Fib2000 = na
+var line Fib2236 = na
+var line Fib2618 = na
+var line Fib3236 = na
+var line Fib3618 = na
+var line Fib4236 = na
+var line Fib4618 = na
 
+Fib0 := Fib_line(Fib_x(0), Fib0)
+Fib236 := Fib_line(Fib_x(0.236), Fib236)
+Fib382 := Fib_line(Fib_x(0.382), Fib382)
+Fib500 := Fib_line(Fib_x(0.500), Fib500)
+Fib618 := Fib_line(Fib_x(0.618), Fib618)
+Fib786 := Fib_line(Fib_x(0.786), Fib786)
+Fib1000 := Fib_line(Fib_x(1.000), Fib1000)
 
-Fib0 = Fib_line(Fib_x(0))
-Fib236 = Fib_line(Fib_x(0.236))
-Fib382 = Fib_line(Fib_x(0.382))
-Fib500 = Fib_line(Fib_x(0.500))
-Fib618 = Fib_line(Fib_x(0.618))
-Fib786 = Fib_line(Fib_x(0.786))
-Fib1000 = Fib_line(Fib_x(1.000))
-
-Fib886 = ExtraFibs ? Fib_line(Fib_x(0.886)) : na
-
-if FIBS == 2
-
-    Fib1113 = ExtraFibs ? Fib_line(Fib_x(1.113)) : na
-
-    Fib1272 = Fib_line(Fib_x(1.272))
-    Fib1618 = Fib_line(Fib_x(1.618))
-    Fib2000 = Fib_line(Fib_x(2.000))
-    Fib2236 = Fib_line(Fib_x(2.236))
-    Fib2618 = Fib_line(Fib_x(2.618))
-    Fib3236 = Fib_line(Fib_x(3.236))
-    Fib3618 = Fib_line(Fib_x(3.618))
-    Fib4236 = Fib_line(Fib_x(4.236))
-    Fib4618 = Fib_line(Fib_x(4.618))
-    Fib4618
-
-
-LFib0 = Fib_label(Fib_x(0), '0 ( ')
-LFib236 = Fib_label(Fib_x(0.236), '0.236 ( ')
-LFib382 = Fib_label(Fib_x(0.382), '0.382 ( ')
-LFib500 = Fib_label(Fib_x(0.500), '0.500 ( ')
-LFib618 = Fib_label(Fib_x(0.618), '0.618 ( ')
-LFib786 = Fib_label(Fib_x(0.786), '0.786 ( ')
-LFib1000 = Fib_label(Fib_x(1.000), '1.000 ( ')
-
-LFib886 = ExtraFibs ? Fib_label(Fib_x(0.886), '0.886 ( ') : na
-
+Fib886 := ExtraFibs ? Fib_line(Fib_x(0.886), Fib886) : na
 
 if FIBS == 2
+    Fib1113 := ExtraFibs ? Fib_line(Fib_x(1.113), Fib1113) : na
+    Fib1272 := Fib_line(Fib_x(1.272), Fib1272)
+    Fib1618 := Fib_line(Fib_x(1.618), Fib1618)
+    Fib2000 := Fib_line(Fib_x(2.000), Fib2000)
+    Fib2236 := Fib_line(Fib_x(2.236), Fib2236)
+    Fib2618 := Fib_line(Fib_x(2.618), Fib2618)
+    Fib3236 := Fib_line(Fib_x(3.236), Fib3236)
+    Fib3618 := Fib_line(Fib_x(3.618), Fib3618)
+    Fib4236 := Fib_line(Fib_x(4.236), Fib4236)
+    Fib4618 := Fib_line(Fib_x(4.618), Fib4618)
 
-    LFib1113 = ExtraFibs ? Fib_label(Fib_x(1.113), '1.113 ( ') : na
+var label LFib0 = na
+var label LFib236 = na
+var label LFib382 = na
+var label LFib500 = na
+var label LFib618 = na
+var label LFib786 = na
+var label LFib1000 = na
+var label LFib886 = na
+var label LFib1113 = na
+var label LFib1272 = na
+var label LFib1618 = na
+var label LFib2000 = na
+var label LFib2236 = na
+var label LFib2618 = na
+var label LFib3236 = na
+var label LFib3618 = na
+var label LFib4236 = na
+var label LFib4618 = na
 
-    LFib1272 = Fib_label(Fib_x(1.272), '1.272 ( ')
-    LFib1618 = Fib_label(Fib_x(1.618), '1.618 ( ')
-    LFib2000 = Fib_label(Fib_x(2.000), '2.000 ( ')
-    LFib2236 = Fib_label(Fib_x(2.236), '2.236 ( ')
-    LFib2618 = Fib_label(Fib_x(2.618), '2.618 ( ')
-    LFib3236 = Fib_label(Fib_x(3.236), '3.236 ( ')
-    LFib3618 = Fib_label(Fib_x(3.618), '3.618 ( ')
-    LFib4236 = Fib_label(Fib_x(4.236), '4.236 ( ')
-    LFib4618 = Fib_label(Fib_x(4.618), '4.618 ( ')
-    LFib4618
+LFib0 := Fib_label(Fib_x(0), '0 ( ', LFib0)
+LFib236 := Fib_label(Fib_x(0.236), '0.236 ( ', LFib236)
+LFib382 := Fib_label(Fib_x(0.382), '0.382 ( ', LFib382)
+LFib500 := Fib_label(Fib_x(0.500), '0.500 ( ', LFib500)
+LFib618 := Fib_label(Fib_x(0.618), '0.618 ( ', LFib618)
+LFib786 := Fib_label(Fib_x(0.786), '0.786 ( ', LFib786)
+LFib1000 := Fib_label(Fib_x(1.000), '1.000 ( ', LFib1000)
+
+LFib886 := ExtraFibs ? Fib_label(Fib_x(0.886), '0.886 ( ', LFib886) : na
+
+if FIBS == 2
+    LFib1113 := ExtraFibs ? Fib_label(Fib_x(1.113), '1.113 ( ', LFib1113) : na
+    LFib1272 := Fib_label(Fib_x(1.272), '1.272 ( ', LFib1272)
+    LFib1618 := Fib_label(Fib_x(1.618), '1.618 ( ', LFib1618)
+    LFib2000 := Fib_label(Fib_x(2.000), '2.000 ( ', LFib2000)
+    LFib2236 := Fib_label(Fib_x(2.236), '2.236 ( ', LFib2236)
+    LFib2618 := Fib_label(Fib_x(2.618), '2.618 ( ', LFib2618)
+    LFib3236 := Fib_label(Fib_x(3.236), '3.236 ( ', LFib3236)
+    LFib3618 := Fib_label(Fib_x(3.618), '3.618 ( ', LFib3618)
+    LFib4236 := Fib_label(Fib_x(4.236), '4.236 ( ', LFib4236)
+    LFib4618 := Fib_label(Fib_x(4.618), '4.618 ( ', LFib4618)
 
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
