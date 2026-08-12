@@ -1878,7 +1878,7 @@ if barstate.isconfirmed
                     buy_sweep_lowest_low := low
                     sell_state := 0 // Opposite sweep cancels bearish setup
 
-    elif buy_state == 1
+    else if buy_state == 1
         // Confirm Reclaim
         if bar_index - buy_sweep_bar > reclaimWindow or close < buy_sweep_lowest_low
             buy_state := 0
@@ -1891,7 +1891,7 @@ if barstate.isconfirmed
                 buy_state := 2
                 buy_reclaim_bar := bar_index
 
-    elif buy_state == 2
+    else if buy_state == 2
         // Confirm MSS
         if bar_index - buy_reclaim_bar > mssWindow or close < buy_sweep_lowest_low
             buy_state := 0
@@ -1910,7 +1910,7 @@ if barstate.isconfirmed
                         buy_state := 3
                         buy_mss_high := high
 
-    elif buy_state == 3
+    else if buy_state == 3
         // Waiting for BOS or immediate Entry
         if not bosRequired
             if bar_index > last_buy_trade_bar + cooldownBars
@@ -1943,7 +1943,7 @@ if barstate.isconfirmed
                     sell_sweep_highest_high := high
                     buy_state := 0 // Opposite sweep cancels bullish setup
 
-    elif sell_state == 1
+    else if sell_state == 1
         // Confirm Reclaim
         if bar_index - sell_sweep_bar > reclaimWindow or close > sell_sweep_highest_high
             sell_state := 0
@@ -1956,7 +1956,7 @@ if barstate.isconfirmed
                 sell_state := 2
                 sell_reclaim_bar := bar_index
 
-    elif sell_state == 2
+    else if sell_state == 2
         // Confirm MSS
         if bar_index - sell_reclaim_bar > mssWindow or close > sell_sweep_highest_high
             sell_state := 0
@@ -1975,7 +1975,7 @@ if barstate.isconfirmed
                         sell_state := 3
                         sell_mss_low := low
 
-    elif sell_state == 3
+    else if sell_state == 3
         // Waiting for BOS or immediate Entry
         if not bosRequired
             if bar_index > last_sell_trade_bar + cooldownBars
@@ -2005,11 +2005,11 @@ float final_qty_long = qty_smc
 if buy_entry_signal_filtered
     if stopMethod == "PivotExtreme"
         sl_long_calc := buy_sweep_lowest_low - (slBufferType == "Ticks" ? slBuffer * syminfo.mintick : slBuffer * atr_val)
-    elif stopMethod == "ATR"
+    else if stopMethod == "ATR"
         sl_long_calc := close - atrSLMult * atr_val
-    elif stopMethod == "Fixed%"
+    else if stopMethod == "Fixed%"
         sl_long_calc := close * (1.0 - slPercent / 100.0)
-    elif stopMethod == "FixedTicks"
+    else if stopMethod == "FixedTicks"
         sl_long_calc := close - slTicks * syminfo.mintick
 
     if not na(sl_long_calc) and sl_long_calc >= close
@@ -2022,11 +2022,11 @@ if buy_entry_signal_filtered
 
     if tpMethod == "RiskReward"
         tp_long_calc := close + rrMultiplier * (close - sl_long_calc)
-    elif tpMethod == "ATR"
+    else if tpMethod == "ATR"
         tp_long_calc := close + atrTPMult * atr_val
-    elif tpMethod == "Fixed%"
+    else if tpMethod == "Fixed%"
         tp_long_calc := close * (1.0 + tpPercent / 100.0)
-    elif tpMethod == "PivotTarget"
+    else if tpMethod == "PivotTarget"
         tp_long_calc := not na(last_p_high_val) ? last_p_high_val : close + 2.0 * atr_val
 
     if not na(tp_long_calc) and tp_long_calc <= close
@@ -2039,11 +2039,11 @@ float final_qty_short = qty_smc
 if sell_entry_signal_filtered
     if stopMethod == "PivotExtreme"
         sl_short_calc := sell_sweep_highest_high + (slBufferType == "Ticks" ? slBuffer * syminfo.mintick : slBuffer * atr_val)
-    elif stopMethod == "ATR"
+    else if stopMethod == "ATR"
         sl_short_calc := close + atrSLMult * atr_val
-    elif stopMethod == "Fixed%"
+    else if stopMethod == "Fixed%"
         sl_short_calc := close * (1.0 + slPercent / 100.0)
-    elif stopMethod == "FixedTicks"
+    else if stopMethod == "FixedTicks"
         sl_short_calc := close + slTicks * syminfo.mintick
 
     if not na(sl_short_calc) and sl_short_calc <= close
@@ -2056,11 +2056,11 @@ if sell_entry_signal_filtered
 
     if tpMethod == "RiskReward"
         tp_short_calc := close - rrMultiplier * (sl_short_calc - close)
-    elif tpMethod == "ATR"
+    else if tpMethod == "ATR"
         tp_short_calc := close - atrTPMult * atr_val
-    elif tpMethod == "Fixed%"
+    else if tpMethod == "Fixed%"
         tp_short_calc := close * (1.0 - tpPercent / 100.0)
-    elif tpMethod == "PivotTarget"
+    else if tpMethod == "PivotTarget"
         tp_short_calc := not na(last_p_low_val) ? last_p_low_val : close - 2.0 * atr_val
 
     if not na(tp_short_calc) and tp_short_calc >= close
