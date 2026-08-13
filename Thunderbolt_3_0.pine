@@ -1288,6 +1288,8 @@ var line line_down = na
 
 var last_actual_label_hh_price = 0.0
 var last_actual_label_ll_price = 0.0
+var float current_labelhh_y = na
+var float current_labelll_y = na
 
 buy_alert = false
 sell_alert = false
@@ -1333,9 +1335,10 @@ moveOverBoughtLabel() =>
 if laststate == 2 and isOverbought
     hh := high
     labelhh := createOverBoughtLabel(true)
-    last_actual_label_ll_price := label.get_y(labelll)
+    current_labelhh_y := high
+    last_actual_label_ll_price := not na(label.get_y(labelll)) ? label.get_y(labelll) : current_labelll_y
     labelll_ts = label.get_x(labelll)
-    labelll_price = label.get_y(labelll)
+    labelll_price = not na(label.get_y(labelll)) ? label.get_y(labelll) : current_labelll_y
     line_up := line.new(x1=bar_index, y1=high, x2=labelll_ts, y2=labelll_price, width=1)
     sell_alert := true
     line_up
@@ -1344,9 +1347,10 @@ if laststate == 2 and isOverbought
 if laststate == 1 and isOversold
     ll := low
     labelll := createOverBoughtLabel(false)
-    last_actual_label_hh_price := label.get_y(labelhh)
+    current_labelll_y := low
+    last_actual_label_hh_price := not na(label.get_y(labelhh)) ? label.get_y(labelhh) : current_labelhh_y
     labelhh_ts = label.get_x(labelhh)
-    labelhh_price = label.get_y(labelhh)
+    labelhh_price = not na(label.get_y(labelhh)) ? label.get_y(labelhh) : current_labelhh_y
     line_down := line.new(x1=bar_index, y1=high, x2=labelhh_ts, y2=labelhh_price, width=1)
     buy_alert := true
     line_down
@@ -1357,6 +1361,7 @@ if isOverbought
     if high >= hh
         hh := high
         moveOverBoughtLabel()
+        current_labelhh_y := high
         sell_alert := true
     laststate := 1
     laststate
@@ -1366,6 +1371,7 @@ if isOversold
     if low <= ll
         ll := low
         moveOversoldLabel()
+        current_labelll_y := low
         buy_alert := true
     laststate := 2
     laststate
@@ -1376,6 +1382,7 @@ if laststate == 1 and isOverbought
     if hh <= high
         hh := high
         moveOverBoughtLabel()
+        current_labelhh_y := high
         sell_alert := true
 
 //If we are oversold and the last state was oversold, move the drawings to the lowest price
@@ -1383,6 +1390,7 @@ if laststate == 2 and isOversold
     if low <= ll
         ll := low
         moveOversoldLabel()
+        current_labelll_y := low
         buy_alert := true
 
 
@@ -1391,6 +1399,7 @@ if laststate == 1
     if hh <= high
         hh := high
         moveOverBoughtLabel()
+        current_labelhh_y := high
         sell_alert := true
 
 // If last stare was oversold
@@ -1398,6 +1407,7 @@ if laststate == 2
     if ll >= low
         ll := low
         moveOversoldLabel()
+        current_labelll_y := low
         buy_alert := true
 
 // ==========================================
@@ -1452,12 +1462,16 @@ if bearDiv
 var bool sigLong = false
 var bool sigShort = false
 
-if useDivSwing and bullDivPending and not na(labelhh) and close > label.get_y(labelhh) and barstate.isconfirmed
+// Break confirmed
+labelhh_y = not na(label.get_y(labelhh)) ? label.get_y(labelhh) : current_labelhh_y
+labelll_y = not na(label.get_y(labelll)) ? label.get_y(labelll) : current_labelll_y
+
+if useDivSwing and bullDivPending and not na(labelhh_y) and close > labelhh_y and barstate.isconfirmed
     sigLong := true
     sigShort := false
     bullDivPending := false
 
-if useDivSwing and bearDivPending and not na(labelll) and close < label.get_y(labelll) and barstate.isconfirmed
+if useDivSwing and bearDivPending and not na(labelll_y) and close < labelll_y and barstate.isconfirmed
     sigShort := true
     sigLong := false
     bearDivPending := false
@@ -1465,6 +1479,9 @@ if useDivSwing and bearDivPending and not na(labelll) and close < label.get_y(la
 // 5. Plot Signals and Alerts
 plotshape(useDivSwing and sigLong and not sigLong[1], title="DivSwing Buy", style=shape.labelup, location=location.belowbar, color=color.green, size=size.small, text="Div Buy", textcolor=color.white)
 plotshape(useDivSwing and sigShort and not sigShort[1], title="DivSwing Sell", style=shape.labeldown, location=location.abovebar, color=color.red, size=size.small, text="Div Sell", textcolor=color.white)
+
+bgcolor(useDivSwing and sigLong and not sigLong[1] ? color.new(color.green, 90) : na)
+bgcolor(useDivSwing and sigShort and not sigShort[1] ? color.new(color.red, 90) : na)
 
 alertcondition(useDivSwing and sigLong and not sigLong[1], title="DivSwing Buy", message="RSI Divergence + Swing Break Buy")
 alertcondition(useDivSwing and sigShort and not sigShort[1], title="DivSwing Sell", message="RSI Divergence + Swing Break Sell")
