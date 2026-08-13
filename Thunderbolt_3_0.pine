@@ -24,7 +24,6 @@ showVWMA20 = input(title='Show VWMA20', defval=false, group = 'VWMA20')
 showVWMA50 = input(title='Show VWMA50', defval=false, group = 'VWMA50')
 
 showPSAR = input(title='Show PSAR', defval=false, group = 'PSAR')
-showPSAR2 = input(title='Show PSAR2', defval=false, group = 'PSAR2')
 
 
 
@@ -80,25 +79,25 @@ SMA9_Len = input.int(9, minval=1, title='SMA9_Length', group = 'SMA 9')
 SMA9_src     = input(close, title="SMA9_Source", group = 'SMA 9')
 //SMA9_offset  = input(title="SMA9_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 SMA9_out = ta.sma(close, SMA9_Len)
-plot(showSMA9 ? SMA9_out : na, title='SMA9', color=color.new(color.green, 0))
+//plot(showSMA9 ? SMA9_out : na, title='SMA9', color=color.new(color.green, 0))
 
 SMA20_Len = input.int(20, minval=1, title='SMA20_Length', group = 'SMA 20')
 SMA20_src    = input(close, title="SMA20_Source", group = 'SMA 20')
 //SMA20_offset = input(title="SMA20_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 SMA20_out = ta.sma(close, SMA20_Len)
-plot(showSMA20 ? SMA20_out : na, title='SMA20', color=color.new(color.red, 0))
+//plot(showSMA20 ? SMA20_out : na, title='SMA20', color=color.new(color.red, 0))
 
 SMA50_Len = input.int(50, minval=1, title='SMA50_Length', group = 'SMA 50')
 SMA50_src    = input(close, title="SMA50_Source", group = 'SMA 50')
 //SMA50_offset = input(title="SMA50_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 SMA50_out = ta.sma(close, SMA50_Len)
-plot(showSMA50 ? SMA50_out : na, title='SMA50', color=color.new(color.olive, 0))
+//plot(showSMA50 ? SMA50_out : na, title='SMA50', color=color.new(color.olive, 0))
 
 SMA100_Len = input.int(100, minval=1, title='SMA100_Length', group = 'SMA 100')
 SMA100_src    = input(close, title="SMA100_Source", group = 'SMA 100')
 //SMA100_offset = input(title="SMA100_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 SMA100_out = ta.sma(close, SMA100_Len)
-plot(showSMA100 ? SMA100_out : na, title='SMA100', color=color.new(color.maroon, 0))
+//plot(showSMA100 ? SMA100_out : na, title='SMA100', color=color.new(color.maroon, 0))
 
 ////////////////////////////////////////////////////WMA////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -106,25 +105,25 @@ wMA9_Len = input.int(9, minval=1, title='wMA9_Length', group = 'WMA 9')
 wMA9_src     = input(close, title="wMA9_Source", group = 'WMA 9')
 //wMA9_offset  = input(title="wMA9_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 wMA9_out = ta.wma(close, wMA9_Len)
-plot(showwMA9 ? wMA9_out : na, title='wMA9', color=color.new(color.navy, 0))
+//plot(showwMA9 ? wMA9_out : na, title='wMA9', color=color.new(color.navy, 0))
 
 wMA20_Len = input.int(20, minval=1, title='wMA20_Length', group = 'WMA 20')
 wMA20_src     = input(close, title="wMA20_Source", group = 'WMA 20')
 //wMA20_offset  = input(title="wMA20_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 wMA20_out = ta.wma(close, wMA20_Len)
-plot(showwMA20 ? wMA20_out : na, title='wMA20', color=color.new(color.olive, 0))
+//plot(showwMA20 ? wMA20_out : na, title='wMA20', color=color.new(color.olive, 0))
 
 wMA50_Len = input.int(50, minval=1, title='wMA50_Length', group = 'WMA 50')
 wMA50_src     = input(close, title="wMA50_Source", group = 'WMA 50')
 //wMA50_offset  = input(title="wMA50_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 wMA50_out = ta.wma(close, wMA50_Len)
-plot(showwMA50 ? wMA50_out : na, title='wMA50', color=color.new(color.purple, 0))
+//plot(showwMA50 ? wMA50_out : na, title='wMA50', color=color.new(color.purple, 0))
 
 wMA100_Len = input.int(100, minval=1, title='wMA100_Length', group = 'WMA 100')
 wMA100_src     = input(close, title="wMA100_Source", group = 'WMA 100')
 //wMA100_offset  = input(title="wMA100_Offset", type=input.integer, defval=0, minval=-500, maxval=500)
 wMA100_out = ta.wma(close, wMA100_Len)
-plot(showwMA100 ? wMA100_out : na, title='wMA100', color=color.new(color.gray, 0))
+//plot(showwMA100 ? wMA100_out : na, title='wMA100', color=color.new(color.gray, 0))
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -143,7 +142,7 @@ VWMAlen9 = input.int(9, "Length", minval=1,group = 'VWMA9')
 srcVWMA9 = input(close, title='VWMA9_Source', group = 'VWMA9')
 vwma9 = ta.vwma(srcVWMA9, VWMAlen9)
 offset = 0
-plot(showVWMA9 ? vwma9 : na, title='VWMA9', offset = offset,color=color.new(color.yellow, 0))
+//plot(showVWMA9 ? vwma9 : na, title='VWMA9', offset = offset,color=color.new(color.yellow, 0))
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////// VWMA20 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -151,7 +150,7 @@ VWMAlen20 = input.int(20, "Length", minval=1,group = 'VWMA20')
 srcVWMA20 = input(close, title='VWMA20_Source', group = 'VWMA20')
 vwma20 = ta.vwma(srcVWMA20, VWMAlen20)
 //offset = input.int(0, "Offset", minval = -500, maxval = 500)
-plot(showVWMA20 ? vwma20 : na, title='VWMA20', offset = offset,color=color.new(color.orange, 0))
+//plot(showVWMA20 ? vwma20 : na, title='VWMA20', offset = offset,color=color.new(color.orange, 0))
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////// VWMA50 /////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -159,7 +158,7 @@ VWMAlen50 = input.int(50, "Length", minval=1,group = 'VWMA50')
 srcVWMA50 = input(close, title='VWMA50_Source', group = 'VWMA50')
 vwma50 = ta.vwma(srcVWMA50, VWMAlen50)
 //offset = input.int(0, "Offset", minval = -500, maxval = 500)
-plot(showVWMA50 ? vwma50 : na, title='VWMA50', offset = offset,color=color.new(color.green, 0))
+//plot(showVWMA50 ? vwma50 : na, title='VWMA50', offset = offset,color=color.new(color.green, 0))
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////// PARABOLIC SAR //////////////////////////////////////////////////////
@@ -170,14 +169,6 @@ maximum = 0.2
 psar_out = ta.sar(start1, increment, maximum)
 plot(showPSAR ? psar_out : na, 'ParabolicSAR', style=plot.style_cross, color=color.new(#2196f3, 0))
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////////////////// PARABOLIC SAR2 //////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-start2 = input.float(0.01,"Start",minval=0.001, group = 'PSAR2')
-increment2 = input.float(0.01,"Increament",minval=0.001, group = 'PSAR2')
-maximum2 = 0.1
-psar_out2 = ta.sar(start2, increment2, maximum2)
-plot(showPSAR2 ? psar_out2 : na, 'ParabolicSAR2', style=plot.style_cross, color=color.new(#8c0707, 0))
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
