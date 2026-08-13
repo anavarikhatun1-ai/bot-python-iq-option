@@ -1,7 +1,7 @@
 //@version=6
 strategy(
      title="ThunderBolt 3.0 Liquidity Sweep MSS (Prop Firm)",
-     shorttitle="TB_Sweep_MSS_PropFirm",
+     short_title="TB_Sweep_MSS_PropFirm",
      overlay=true,
      initial_capital=10000,
      default_qty_type=strategy.percent_of_equity,
@@ -186,11 +186,16 @@ var int lastPivotHighBar = na
 var float lastPivotLowVal = na
 var int lastPivotLowBar = na
 
+var float prevPivotHighVal = na
+var float prevPivotLowVal = na
+
 if not na(pivotHigh)
+    prevPivotHighVal := lastPivotHighVal
     lastPivotHighVal := pivotHigh
     lastPivotHighBar := bar_index - pivotLen
 
 if not na(pivotLow)
+    prevPivotLowVal := lastPivotLowVal
     lastPivotLowVal := pivotLow
     lastPivotLowBar := bar_index - pivotLen
 
@@ -198,9 +203,10 @@ if not na(pivotLow)
 var bool isBullishStructure = true
 var bool isBearishStructure = true
 
-if not na(pivotHigh) and not na(pivotLow)
-    isBullishStructure := (lastPivotHighVal > lastPivotHighVal[1]) and (lastPivotLowVal > lastPivotLowVal[1])
-    isBearishStructure := (lastPivotHighVal < lastPivotHighVal[1]) and (lastPivotLowVal < lastPivotLowVal[1])
+if not na(pivotHigh) or not na(pivotLow)
+    if not na(lastPivotHighVal) and not na(prevPivotHighVal) and not na(lastPivotLowVal) and not na(prevPivotLowVal)
+        isBullishStructure := (lastPivotHighVal > prevPivotHighVal) and (lastPivotLowVal > prevPivotLowVal)
+        isBearishStructure := (lastPivotHighVal < prevPivotHighVal) and (lastPivotLowVal < prevPivotLowVal)
 
 marketStructureDirectionOkBuy = (structureMode == "Auto" and isBearishStructure) or (structureMode == "Bearish") or (structureMode == "Bullish")
 marketStructureDirectionOkSell = (structureMode == "Auto" and isBullishStructure) or (structureMode == "Bullish") or (structureMode == "Bearish")
@@ -235,7 +241,7 @@ current_day = dayofmonth(time, timezone == "exchange" ? syminfo.timezone : timez
 day_changed = ta.change(current_day) != 0
 
 in_session = not sessionFilter or not na(time(timeframe.period, tradeSession, timezone == "exchange" ? syminfo.timezone : timezone))
-session_changed = ta.change(in_session) != 0
+session_changed = ta.change(in_session ? 1 : 0) != 0
 
 // Reset state at start/end of session or day
 if session_changed or not in_session or day_changed
@@ -478,7 +484,7 @@ last_position_size := strategy.position_size
 trade_count_safety = trades_today < maxDailyTrades
 
 // 4.3 Session Flattening Action
-if flattenAtSessionEnd and sessionFilter and (ta.change(in_session) != 0 and not in_session)
+if flattenAtSessionEnd and sessionFilter and (ta.change(in_session ? 1 : 0) != 0 and not in_session)
     strategy.close_all("Session End Flatten")
 
 
@@ -609,7 +615,7 @@ if sell_entry_cond and allowed_to_trade
     else if stopMethod == "Fixed%"
         sl_price := close * (1.0 + slPercent / 100.0)
     else if stopMethod == "FixedTicks"
-        sl_price := close + slTicks * syminfo.mintick
+        sl_price := close - slTicks * syminfo.mintick
 
     if sl_price <= close
         sl_price := close + 5.0 * syminfo.mintick
@@ -697,7 +703,7 @@ sell_bos_alert     = sell_state == 4 and sell_state[1] == 3
 sell_entry_alert   = sell_entry_cond
 
 daily_loss_lock_alert = dailyLossLocked and not dailyLossLocked[1]
-session_flatten_alert = flattenAtSessionEnd and sessionFilter and (ta.change(in_session) != 0 and not in_session)
+session_flatten_alert = flattenAtSessionEnd and sessionFilter and (ta.change(in_session ? 1 : 0) != 0 and not in_session)
 
 // Dynamic alert() triggers (for strategy order execution and logging)
 if buy_sweep_alert
