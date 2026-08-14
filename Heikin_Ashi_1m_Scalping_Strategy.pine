@@ -1,0 +1,98 @@
+//@version=5
+strategy("1M Heikin Ashi Scalping Strategy", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, process_orders_on_close=true)
+
+// ==========================================
+// 1. Core Environment & Data Fetching
+// ==========================================
+// Fetch Heikin Ashi series using ticker.heikinashi to match chart calculation
+ha_ticker = ticker.heikinashi(syminfo.tickerid)
+[ha_open, ha_high, ha_low, ha_close] = request.security(ha_ticker, timeframe.period, [open, high, low, close])
+
+// Primary Indicator: 100-period Exponential Moving Average (EMA)
+ema_length = input.int(100, title="EMA Length", minval=1, group="Strategy Parameters")
+ema100 = ta.ema(ha_close, ema_length)
+
+// Plot 100 EMA on chart
+plot(ema100, title="100 EMA", color=color.blue, linewidth=2)
+
+// ==========================================
+// 2. Condition 1: Trend Filter
+// ==========================================
+long_trend = ha_close > ema100
+short_trend = ha_close < ema100
+
+// ==========================================
+// 3. Condition 2: Clean Pullback Logic
+// ==========================================
+// Inputs for customization
+doji_body_percent = input.float(25.0, title="Doji Max Body (% of Range)", minval=1.0, maxval=50.0, group="Doji Parameters")
+rr_ratio = input.float(1.0, title="Risk-to-Reward Ratio", minval=0.1, step=0.1, group="Risk Management")
+
+// Bearish HA Candle with NO upper wick (High == Open and Close < Open)
+is_clean_bear_ha(idx) =>
+    (ha_high[idx] == ha_open[idx]) and (ha_close[idx] < ha_open[idx])
+
+// Bullish HA Candle with NO lower wick (Low == Open and Close > Open)
+is_clean_bull_ha(idx) =>
+    (ha_low[idx] == ha_open[idx]) and (ha_close[idx] > ha_open[idx])
+
+// Verify clean pullback of at least 2 consecutive HA candles preceding the current bar
+clean_bearish_pullback = is_clean_bear_ha(1) and is_clean_bear_ha(2)
+clean_bullish_pullback = is_clean_bull_ha(1) and is_clean_bull_ha(2)
+
+// ==========================================
+// 4. Condition 3: High-Volume Doji Trigger
+// ==========================================
+// HA Candle dimensions
+ha_range = ha_high - ha_low
+ha_body = math.abs(ha_close - ha_open)
+
+// Doji definition: small body relative to range with upper and lower wicks present
+is_doji = (ha_range > 0) and ((ha_body / ha_range) * 100.0 <= doji_body_percent) and (ha_high > math.max(ha_open, ha_close)) and (ha_low < math.min(ha_open, ha_close))
+
+// Volume Filter: Doji total range must be greater than at least one of the previous two HA candles' ranges
+volume_range_filter = (ha_range > ha_range[1]) or (ha_range > ha_range[2])
+
+// Final Signal Conditions (evaluated on bar close)
+long_condition = barstate.isconfirmed and long_trend and clean_bearish_pullback and is_doji and volume_range_filter
+short_condition = barstate.isconfirmed and short_trend and clean_bullish_pullback and is_doji and volume_range_filter
+
+// ==========================================
+// 5. Execution & Dynamic Risk Management (1:1 R:R)
+// ==========================================
+var float long_sl = na
+var float long_tp = na
+var float short_sl = na
+var float short_tp = na
+
+if long_condition
+    long_sl := ha_low
+    long_risk = close - long_sl
+    long_tp := close + (long_risk * rr_ratio)
+    strategy.entry("Buy", strategy.long)
+    strategy.exit("Exit Buy", "Buy", stop=long_sl, limit=long_tp)
+
+if short_condition
+    short_sl := ha_high
+    short_risk = short_sl - close
+    short_tp := close - (short_risk * rr_ratio)
+    strategy.entry("Sell", strategy.short)
+    strategy.exit("Exit Sell", "Sell", stop=short_sl, limit=short_tp)
+
+// ==========================================
+// 6. Visual Labels & Alerts
+// ==========================================
+// Plot 'Buy' and 'Sell' labels on chart matching visual style requirements
+plotshape(long_condition, title="Buy Signal", style=shape.labelup, location=location.belowbar, color=color.green, text="Buy", textcolor=color.white, size=size.normal)
+plotshape(short_condition, title="Sell Signal", style=shape.labeldown, location=location.abovebar, color=color.red, text="Sell", textcolor=color.white, size=size.normal)
+
+// Dynamic alerts via alert() function for automated strategy execution
+if long_condition
+    alert("1M Scalp BUY Signal | Price: " + str.tostring(close) + " | SL: " + str.tostring(long_sl) + " | TP: " + str.tostring(long_tp), alert.freq_once_per_bar_close)
+
+if short_condition
+    alert("1M Scalp SELL Signal | Price: " + str.tostring(close) + " | SL: " + str.tostring(short_sl) + " | TP: " + str.tostring(short_tp), alert.freq_once_per_bar_close)
+
+// alertcondition() declarations for indicator compatibility / standalone alerts
+alertcondition(long_condition, title="Buy Signal Alert", message="1M Scalp BUY Signal Triggered!")
+alertcondition(short_condition, title="Sell Signal Alert", message="1M Scalp SELL Signal Triggered!")
