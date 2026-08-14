@@ -1,0 +1,914 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Bheemanadhuni_stocks Modified and Version Upgraded by Option Forward
+//@version=5
+
+indicator(title='Thunderbolt 3.0', overlay=true)
+
+// ==========================================
+// INPUTS & SETTINGS
+// ==========================================
+showBB       = input.bool(title='Show BB', defval=false, group='Bollinger Band')
+showVWAP     = input.bool(title='Show VWAP', defval=false, group='Vwap')
+showEMA9     = input.bool(title='Show EMA 9', defval=true, group='EMA Lines')
+showEMA15    = input.bool(title='Show EMA 15', defval=true, group='EMA Lines')
+showEMA20    = input.bool(title='Show EMA 20', defval=false, group='EMA Lines')
+showEMA50    = input.bool(title='Show EMA 50', defval=false, group='EMA Lines')
+showEMA100   = input.bool(title='Show EMA 100', defval=false, group='EMA Lines')
+showEMA200   = input.bool(title='Show EMA 200', defval=false, group='EMA Lines')
+
+showSMA9     = input.bool(title='Show SMA-9', defval=false, group='SMA Lines')
+showSMA20    = input.bool(title='Show SMA -20', defval=false, group='SMA Lines')
+showSMA50    = input.bool(title='Show SMA-50', defval=false, group='SMA Lines')
+showSMA100   = input.bool(title='Show SMA-100', defval=false, group='SMA Lines')
+
+showwMA9     = input.bool(title='Show WMA-9', defval=false, group='WMA Lines')
+showwMA20    = input.bool(title='Show WMA-20', defval=false, group='WMA Lines')
+showwMA50    = input.bool(title='Show WMA-50', defval=false, group='WMA Lines')
+showwMA100   = input.bool(title='Show WMA-100', defval=false, group='WMA Lines')
+
+showVWMA9    = input.bool(title='Show VWMA9', defval=false, group='VWMA Lines')
+showVWMA20   = input.bool(title='Show VWMA20', defval=false, group='VWMA Lines')
+showVWMA50   = input.bool(title='Show VWMA50', defval=false, group='VWMA Lines')
+
+showPSAR     = input.bool(title='Show PSAR', defval=false, group='PSAR')
+showPSAR2    = input.bool(title='Show PSAR2', defval=false, group='PSAR2')
+
+/////// Alerts ///////
+alertMode    = input.string(alert.freq_once_per_bar_close, "Alerts Mode", group="Alert Frequency", options=[alert.freq_once_per_bar, alert.freq_once_per_bar_close])
+
+// ==========================================
+// BOLLINGER BANDS
+// ==========================================
+length = input.int(20, minval=1, group='Bollinger Band')
+src = input.source(close, title='BB_Source', group='Bollinger Band')
+mult = input.float(2.0, minval=0.001, maxval=50, title='BB_StdDev', group='Bollinger Band')
+basis = ta.sma(src, length)
+dev = mult * ta.stdev(src, length)
+upper = basis + dev
+lower = basis - dev
+plot(showBB ? basis : na, 'Basis', color=color.new(#872323, 0))
+p1 = plot(showBB ? upper : na, 'Upper', color=color.new(color.teal, 0))
+p2 = plot(showBB ? lower : na, 'Lower', color=color.new(color.teal, 0))
+fill(p1, p2, title='Background', color=color.new(#198787, 95))
+
+// ==========================================
+// EMA LINES
+// ==========================================
+EMA9_Len = input.int(9, minval=1, title='EMA9_Length', group='EMA Lines')
+EMA9_src = input.source(close, title='EMA9_Source', group='EMA Lines')
+EMA9_out = ta.ema(EMA9_src, EMA9_Len)
+plot(showEMA9 ? EMA9_out : na, title='EMA9', color=color.new(color.blue, 0), linewidth=2)
+
+EMA15_Len = input.int(15, minval=1, title='EMA15_Length', group='EMA Lines')
+EMA15_src = input.source(close, title='EMA15_Source', group='EMA Lines')
+EMA15_out = ta.ema(EMA15_src, EMA15_Len)
+plot(showEMA15 ? EMA15_out : na, title='EMA15', color=color.new(color.orange, 0), linewidth=2)
+
+EMA20_Len = input.int(20, minval=1, title='EMA20_Length', group='EMA Lines')
+EMA20_src = input.source(close, title='EMA20_Source', group='EMA Lines')
+EMA20_out = ta.ema(EMA20_src, EMA20_Len)
+plot(showEMA20 ? EMA20_out : na, title='EMA20', color=color.new(color.yellow, 0))
+
+EMA50_Len = input.int(50, minval=1, title='EMA50_Length', group='EMA Lines')
+EMA50_src = input.source(close, title='EMA50_Source', group='EMA Lines')
+EMA50_out = ta.ema(EMA50_src, EMA50_Len)
+plot(showEMA50 ? EMA50_out : na, title='EMA50', color=color.new(color.red, 0))
+
+EMA100_Len = input.int(100, minval=1, title='EMA100_Length', group='EMA Lines')
+EMA100_src = input.source(close, title='EMA100_Source', group='EMA Lines')
+EMA100_out = ta.ema(EMA100_src, EMA100_Len)
+plot(showEMA100 ? EMA100_out : na, title='EMA100', color=color.new(color.purple, 0))
+
+EMA200_Len = input.int(200, minval=1, title='EMA200_Length', group='EMA Lines')
+EMA200_src = input.source(close, title='EMA200_Source', group='EMA Lines')
+EMA200_out = ta.ema(EMA200_src, EMA200_Len)
+plot(showEMA200 ? EMA200_out : na, title='EMA200', color=color.new(color.green, 0))
+
+// ==========================================
+// SMA LINES
+// ==========================================
+SMA9_Len = input.int(9, minval=1, title='SMA9_Length', group='SMA Lines')
+SMA9_out = ta.sma(close, SMA9_Len)
+plot(showSMA9 ? SMA9_out : na, title='SMA9', color=color.new(color.green, 0))
+
+SMA20_Len = input.int(20, minval=1, title='SMA20_Length', group='SMA Lines')
+SMA20_out = ta.sma(close, SMA20_Len)
+plot(showSMA20 ? SMA20_out : na, title='SMA20', color=color.new(color.red, 0))
+
+SMA50_Len = input.int(50, minval=1, title='SMA50_Length', group='SMA Lines')
+SMA50_out = ta.sma(close, SMA50_Len)
+plot(showSMA50 ? SMA50_out : na, title='SMA50', color=color.new(color.olive, 0))
+
+SMA100_Len = input.int(100, minval=1, title='SMA100_Length', group='SMA Lines')
+SMA100_out = ta.sma(close, SMA100_Len)
+plot(showSMA100 ? SMA100_out : na, title='SMA100', color=color.new(color.maroon, 0))
+
+// ==========================================
+// WMA LINES
+// ==========================================
+wMA9_Len = input.int(9, minval=1, title='wMA9_Length', group='WMA Lines')
+wMA9_out = ta.wma(close, wMA9_Len)
+plot(showwMA9 ? wMA9_out : na, title='wMA9', color=color.new(color.navy, 0))
+
+wMA20_Len = input.int(20, minval=1, title='wMA20_Length', group='WMA Lines')
+wMA20_out = ta.wma(close, wMA20_Len)
+plot(showwMA20 ? wMA20_out : na, title='wMA20', color=color.new(color.olive, 0))
+
+wMA50_Len = input.int(50, minval=1, title='wMA50_Length', group='WMA Lines')
+wMA50_out = ta.wma(close, wMA50_Len)
+plot(showwMA50 ? wMA50_out : na, title='wMA50', color=color.new(color.purple, 0))
+
+wMA100_Len = input.int(100, minval=1, title='wMA100_Length', group='WMA Lines')
+wMA100_out = ta.wma(close, wMA100_Len)
+plot(showwMA100 ? wMA100_out : na, title='wMA100', color=color.new(color.gray, 0))
+
+// ==========================================
+// VWAP
+// ==========================================
+cvwap1 = ta.vwap(hlc3)
+plot(showVWAP ? cvwap1 : na, title='VWAP', color=color.new(color.black, 0), linewidth=2)
+
+// ==========================================
+// VWMA LINES
+// ==========================================
+VWMAlen9 = input.int(9, "Length", minval=1, group='VWMA Lines')
+srcVWMA9 = input.source(close, title='VWMA9_Source', group='VWMA Lines')
+vwma9 = ta.vwma(srcVWMA9, VWMAlen9)
+offset = 0
+plot(showVWMA9 ? vwma9 : na, title='VWMA9', offset=offset, color=color.new(color.yellow, 0))
+
+VWMAlen20 = input.int(20, "Length", minval=1, group='VWMA Lines')
+srcVWMA20 = input.source(close, title='VWMA20_Source', group='VWMA Lines')
+vwma20 = ta.vwma(srcVWMA20, VWMAlen20)
+plot(showVWMA20 ? vwma20 : na, title='VWMA20', offset=offset, color=color.new(color.orange, 0))
+
+VWMAlen50 = input.int(50, "Length", minval=1, group='VWMA Lines')
+srcVWMA50 = input.source(close, title='VWMA50_Source', group='VWMA Lines')
+vwma50 = ta.vwma(srcVWMA50, VWMAlen50)
+plot(showVWMA50 ? vwma50 : na, title='VWMA50', offset=offset, color=color.new(color.green, 0))
+
+// ==========================================
+// PARABOLIC SAR
+// ==========================================
+start1 = input.float(0.02, "Start", minval=0.001, group='PSAR')
+increment = input.float(0.02, "Increament", minval=0.001, group='PSAR')
+maximum = 0.2
+psar_out = ta.sar(start1, increment, maximum)
+plot(showPSAR ? psar_out : na, 'ParabolicSAR', style=plot.style_cross, color=color.new(#2196f3, 0))
+
+start2 = input.float(0.01, "Start", minval=0.001, group='PSAR2')
+increment2 = input.float(0.01, "Increament", minval=0.001, group='PSAR2')
+maximum2 = 0.1
+psar_out2 = ta.sar(start2, increment2, maximum2)
+plot(showPSAR2 ? psar_out2 : na, 'ParabolicSAR2', style=plot.style_cross, color=color.new(#8c0707, 0))
+
+// ==========================================
+// TRENDLINES & BREAKS (PRIMARY & SECONDARY)
+// ==========================================
+ShowTrendCandles = input.bool(false, title='Trend Candles', group='TREND')
+ShowSupResZones  = input.bool(false, title='Support / Resistance Zones', group='TREND')
+InvertColors     = input.bool(true, title='Support / Resistance Zones - Invert Colors', group='TREND')
+
+a_Color_Type = input.string(title='1 - Primary - Trendlines - Color Scheme', defval='Colored', options=['Colored', 'Monochrome'], group='TREND')
+a_Show_Primary = input.bool(true, title='1 - Primary - Trendlines', group='TREND')
+a_Rising_Upper_Falling_Lower = input.bool(false, '1 - Primary - Rising Upper and Falling Lower Trendlines', group='TREND')
+a_len = input.int(20, title='1 - Primary - Lookback Length', group='TREND')
+a_Wicks = input.string(title='1 - Primary - Draw lines from', defval='Wicks', options=['Wicks', 'Real Bodies'], group='TREND')
+a_Extensions = input.string(title='1 - Primary - Trendline Extensions', defval=' 150', options=['Infinate', '  25', '  50', '  75', ' 100', ' 150', ' 200', ' 300', ' 400', ' 500', ' 750', '1000'], group='TREND')
+a_width = input.int(1, title='1 - Primary - Line Width', minval=0, maxval=10, group='TREND')
+a_Line_Type_In = input.string(title='1 - Primary - Line Type', defval='Dashed', options=['Dashed', 'Dotted', 'Solid'], group='TREND')
+a_Line_Type = a_Line_Type_In == 'Dashed' ? line.style_dashed : a_Line_Type_In == 'Dotted' ? line.style_dotted : line.style_solid
+
+a_Show_Breaks = input.string(title='1 - Primary - Trendline Breaks;', defval='n/a', options=['Barcolor', 'Triangles + Barcolor', 'Triangles', 'n/a'], group='TREND')
+a_trendline_nr = input.int(3, title='1 - Primary - Trendline Breaks - Number of Past Trendlines to Check for Breaks', minval=0, maxval=10, group='TREND')
+a_select_breaks = input.bool(true, title='1 - Primary - Trendline Breaks - Display Only Long Breaks on Highs & Short for Lows', group='TREND')
+
+b_Show_Secondary = input.bool(true, title='2 - Secondary - Trendlines', group='TREND SECONDARY')
+b_Rising_Upper_Falling_Lower = input.bool(false, '2 - Secondary - Rising Upper and Falling Lower Trendlines', group='TREND SECONDARY')
+b_len = input.int(7, title='2 - Secondary - Lookback Length', group='TREND SECONDARY')
+b_Wicks = input.string(title='2 - Secondary - Draw lines from', defval='Wicks', options=['Wicks', 'Real Bodies'], group='TREND SECONDARY')
+b_Extensions = input.string(title='2 - Secondary - Trendline Extensions', defval='  25', options=['Infinate', '  25', '  50', '  75', ' 100', ' 150', ' 200', ' 300', ' 400', ' 500', ' 750', '1000'], group='TREND SECONDARY')
+b_width = input.int(1, title='2 - Secondary - Line Width', minval=0, maxval=10, group='TREND SECONDARY')
+b_Line_Type_In = input.string(title='2 - Secondary - Line Type', defval='Dotted', options=['Dashed', 'Dotted', 'Solid'], group='TREND SECONDARY')
+b_Line_Type = b_Line_Type_In == 'Dashed' ? line.style_dashed : b_Line_Type_In == 'Dotted' ? line.style_dotted : line.style_solid
+
+b_Show_Breaks = input.string(title='2 - Secondary - Trendline Breaks;', defval='n/a', options=['Barcolor', 'Triangles + Barcolor', 'Triangles', 'n/a'], group='TREND SECONDARY')
+b_trendline_nr = input.int(5, title='2 - Secondary - Trendline Breaks - Number of Past Trendlines to Check for Breaks', minval=0, maxval=10, group='TREND SECONDARY')
+b_select_breaks = input.bool(true, title='2 - Secondary - Trendline Breaks - Display Only Long Breaks on Highs & Short for Lows', group='TREND SECONDARY')
+
+log_chart = input.bool(false, title='Log Chart?', group='TREND')
+
+a_bar_time = time - time[1]
+b_bar_time = time - time[1]
+
+a_Extension_Multiplier = a_Extensions == '  25' ? 1 : a_Extensions == '  50' ? 2 : a_Extensions == '  75' ? 3 : a_Extensions == ' 100' ? 4 : a_Extensions == ' 150' ? 6 : a_Extensions == ' 200' ? 8 : a_Extensions == ' 300' ? 12 : a_Extensions == ' 400' ? 16 : a_Extensions == ' 500' ? 20 : a_Extensions == ' 750' ? 30 : a_Extensions == '1000' ? 40 : a_Extensions == 'Infinate' ? 0 : na
+
+a_f_trendline(a__input_function, a__delay, a__only_up, a__extend) =>
+    var int a_Ax = 1
+    var int a_Bx = 1
+    var float a_By = 0.0
+    var float a_slope = 0.0
+    a_Ay = fixnan(a__input_function)
+    if ta.change(a_Ay) != 0
+        a_Ax := time[a__delay]
+        a_By := a_Ay[1]
+        a_Bx := a_Ax[1]
+        a_slope := log_chart ? (math.log(a_Ay) - math.log(a_By)) / (a_Ax - a_Bx) : (a_Ay - a_By) / (a_Ax - a_Bx)
+        a_slope
+    else
+        a_Ax := a_Ax[1]
+        a_Bx := a_Bx[1]
+        a_By := a_By[1]
+        a_By
+    var line a_trendline = na
+    var int a_Axbis = 0
+    var float a_Aybis = 0.0
+    var bool a__xtend = true
+    a_extension_time = a_Extension_Multiplier * a_bar_time * 25
+    a_Axbis := a_Ax + a_extension_time
+    a_Aybis := log_chart ? a_Ay * math.exp(a_extension_time * a_slope) : a_Ay + a_extension_time * a_slope
+    if a_Extension_Multiplier != 0
+        a__xtend := false
+        a__xtend
+    if ta.change(a_Ay) != 0
+        a_line_color_Rising_Falling = a_slope * time < 0 ? a__only_up ? a_Rising_Upper_Falling_Lower ? a_Color_Type == 'Colored' ? color.gray : color.teal : na : a_Color_Type == 'Colored' ? color.green : color.teal : a__only_up ? a_Color_Type == 'Colored' ? color.red : color.teal : a_Rising_Upper_Falling_Lower ? a_Color_Type == 'Colored' ? color.gray : color.teal : na
+        a_line_color_Not_Rising_Falling = a_slope * time < 0 ? a__only_up ? na : a_Color_Type == 'Colored' ? color.green : color.teal : a__only_up ? a_Color_Type == 'Colored' ? color.red : color.teal : na
+        a_line_color = a_Show_Primary and not a_Rising_Upper_Falling_Lower ? a_line_color_Not_Rising_Falling : a_Show_Primary and a_Rising_Upper_Falling_Lower ? a_line_color_Rising_Falling : na
+
+        if not na(a_line_color)
+            a_trendline := line.new(a_Bx, a_By, a_Axbis, a_Aybis, xloc.bar_time, extend=a__xtend ? extend.right : extend.none, color=a_line_color, style=a_Line_Type, width=a_width)
+            a_trendline
+    [a_Bx, a_By, a_Axbis, a_Aybis, a_slope]
+
+a_line_get_price(a__start_time, a__start_price, a__slope, a__lookback_period, a__log_chart) =>
+    var float a_current_price = 0.0
+    a_elapsed_time = time - a__start_time
+    a_current_price := a__log_chart ? a__start_price * math.exp((a_elapsed_time - a__lookback_period * a_bar_time) * a__slope) : a__start_price + (a_elapsed_time - a__lookback_period * a_bar_time) * a__slope
+    a_current_price
+
+a_line_cross(a__check_value, a__start_time, a__start_price, a__slope, a__log_chart) =>
+    var float a_current_value = 0.0
+    var float a_previous_value = 0.0
+    a_current_value := a_line_get_price(a__start_time, a__start_price, a__slope, 0, a__log_chart)
+    a_previous_value := a_line_get_price(a__start_time, a__start_price, a__slope, 1, a__log_chart)
+    a_cross = a__check_value[1] < a_previous_value and a__check_value > a_current_value ? 1 : a__check_value[1] > a_previous_value and a__check_value < a_current_value ? -1 : 0
+    a_cross
+
+// Correct integer division for Pine v5
+int a_delay_int = int(a_len / 2)
+a_high_point = ta.pivothigh(a_Wicks == 'Wicks' ? high : close > open ? close : open, a_len, a_delay_int)
+a_low_point = ta.pivotlow(a_Wicks == 'Wicks' ? low : close > open ? open : close, a_len, a_delay_int)
+
+[a_phx1, a_phy1, a_phx2, a_phy2, a_slope_high] = a_f_trendline(a_high_point, a_delay_int, false, true)
+[a_plx1, a_ply1, a_plx2, a_ply2, a_slope_low] = a_f_trendline(a_low_point, a_delay_int, true, true)
+
+var int a_high_x0 = 0, var float a_high_y0 = 0.0, var float a_high_sl0 = 0.0
+var int a_high_x1 = 0, var float a_high_y1 = 0.0, var float a_high_sl1 = 0.0
+var int a_high_x2 = 0, var float a_high_y2 = 0.0, var float a_high_sl2 = 0.0
+var int a_high_x3 = 0, var float a_high_y3 = 0.0, var float a_high_sl3 = 0.0
+var int a_high_x4 = 0, var float a_high_y4 = 0.0, var float a_high_sl4 = 0.0
+var int a_high_x5 = 0, var float a_high_y5 = 0.0, var float a_high_sl5 = 0.0
+var int a_high_x6 = 0, var float a_high_y6 = 0.0, var float a_high_sl6 = 0.0
+var int a_high_x7 = 0, var float a_high_y7 = 0.0, var float a_high_sl7 = 0.0
+var int a_high_x8 = 0, var float a_high_y8 = 0.0, var float a_high_sl8 = 0.0
+var int a_high_x9 = 0, var float a_high_y9 = 0.0, var float a_high_sl9 = 0.0
+
+var int a_low_x0 = 0, var float a_low_y0 = 0.0, var float a_low_sl0 = 0.0
+var int a_low_x1 = 0, var float a_low_y1 = 0.0, var float a_low_sl1 = 0.0
+var int a_low_x2 = 0, var float a_low_y2 = 0.0, var float a_low_sl2 = 0.0
+var int a_low_x3 = 0, var float a_low_y3 = 0.0, var float a_low_sl3 = 0.0
+var int a_low_x4 = 0, var float a_low_y4 = 0.0, var float a_low_sl4 = 0.0
+var int a_low_x5 = 0, var float a_low_y5 = 0.0, var float a_low_sl5 = 0.0
+var int a_low_x6 = 0, var float a_low_y6 = 0.0, var float a_low_sl6 = 0.0
+var int a_low_x7 = 0, var float a_low_y7 = 0.0, var float a_low_sl7 = 0.0
+var int a_low_x8 = 0, var float a_low_y8 = 0.0, var float a_low_sl8 = 0.0
+var int a_low_x9 = 0, var float a_low_y9 = 0.0, var float a_low_sl9 = 0.0
+
+if ta.change(fixnan(a_high_point)) != 0
+    a_high_x9 := a_high_x8, a_high_y9 := a_high_y8, a_high_sl9 := a_high_sl8
+    a_high_x8 := a_high_x7, a_high_y8 := a_high_y7, a_high_sl8 := a_high_sl7
+    a_high_x7 := a_high_x6, a_high_y7 := a_high_y6, a_high_sl7 := a_high_sl6
+    a_high_x6 := a_high_x5, a_high_y6 := a_high_y5, a_high_sl6 := a_high_sl5
+    a_high_x5 := a_high_x4, a_high_y5 := a_high_y4, a_high_sl5 := a_high_sl4
+    a_high_x4 := a_high_x3, a_high_y4 := a_high_y3, a_high_sl4 := a_high_sl3
+    a_high_x3 := a_high_x2, a_high_y3 := a_high_y2, a_high_sl3 := a_high_sl2
+    a_high_x2 := a_high_x1, a_high_y2 := a_high_y1, a_high_sl2 := a_high_sl1
+    a_high_x1 := a_high_x0, a_high_y1 := a_high_y0, a_high_sl1 := a_high_sl0
+    a_high_x0 := a_phx1, a_high_y0 := a_phy1, a_high_sl0 := a_slope_high
+
+if ta.change(fixnan(a_low_point)) != 0
+    a_low_x9 := a_low_x8, a_low_y9 := a_low_y8, a_low_sl9 := a_low_sl8
+    a_low_x8 := a_low_x7, a_low_y8 := a_low_y7, a_low_sl8 := a_low_sl7
+    a_low_x7 := a_low_x6, a_low_y7 := a_low_y6, a_low_sl7 := a_low_sl6
+    a_low_x6 := a_low_x5, a_low_y6 := a_low_y5, a_low_sl6 := a_low_sl5
+    a_low_x5 := a_low_x4, a_low_y5 := a_low_y4, a_low_sl5 := a_low_sl4
+    a_low_x4 := a_low_x3, a_low_y4 := a_low_y3, a_low_sl4 := a_low_sl3
+    a_low_x3 := a_low_x2, a_low_y3 := a_low_y2, a_low_sl3 := a_low_sl2
+    a_low_x2 := a_low_x1, a_low_y2 := a_low_y1, a_low_sl2 := a_low_sl1
+    a_low_x1 := a_low_x0, a_low_y1 := a_low_y0, a_low_sl1 := a_low_sl0
+    a_low_x0 := a_plx1, a_low_y0 := a_ply1, a_low_sl0 := a_slope_low
+
+a_cross_high0 = not a_Rising_Upper_Falling_Lower and a_high_sl0 * time > 0 ? 0 : a_line_cross(close, a_high_x0, a_high_y0, a_high_sl0, log_chart)
+a_cross_low0 = not a_Rising_Upper_Falling_Lower and a_low_sl0 * time < 0 ? 0 : a_line_cross(close, a_low_x0, a_low_y0, a_low_sl0, log_chart)
+a_cross_high1 = not a_Rising_Upper_Falling_Lower and a_high_sl1 * time > 0 ? 0 : a_line_cross(close, a_high_x1, a_high_y1, a_high_sl1, log_chart)
+a_cross_low1 = not a_Rising_Upper_Falling_Lower and a_low_sl1 * time < 0 ? 0 : a_line_cross(close, a_low_x1, a_low_y1, a_low_sl1, log_chart)
+a_cross_high2 = not a_Rising_Upper_Falling_Lower and a_high_sl2 * time > 0 ? 0 : a_line_cross(close, a_high_x2, a_high_y2, a_high_sl2, log_chart)
+a_cross_low2 = not a_Rising_Upper_Falling_Lower and a_low_sl2 * time < 0 ? 0 : a_line_cross(close, a_low_x2, a_low_y2, a_low_sl2, log_chart)
+a_cross_high3 = not a_Rising_Upper_Falling_Lower and a_high_sl3 * time > 0 ? 0 : a_line_cross(close, a_high_x3, a_high_y3, a_high_sl3, log_chart)
+a_cross_low3 = not a_Rising_Upper_Falling_Lower and a_low_sl3 * time < 0 ? 0 : a_line_cross(close, a_low_x3, a_low_y3, a_low_sl3, log_chart)
+a_cross_high4 = not a_Rising_Upper_Falling_Lower and a_high_sl4 * time > 0 ? 0 : a_line_cross(close, a_high_x4, a_high_y4, a_high_sl4, log_chart)
+a_cross_low4 = not a_Rising_Upper_Falling_Lower and a_low_sl4 * time < 0 ? 0 : a_line_cross(close, a_low_x4, a_low_y4, a_low_sl4, log_chart)
+a_cross_high5 = not a_Rising_Upper_Falling_Lower and a_high_sl5 * time > 0 ? 0 : a_line_cross(close, a_high_x5, a_high_y5, a_high_sl5, log_chart)
+a_cross_low5 = not a_Rising_Upper_Falling_Lower and a_low_sl5 * time < 0 ? 0 : a_line_cross(close, a_low_x5, a_low_y5, a_low_sl5, log_chart)
+a_cross_high6 = not a_Rising_Upper_Falling_Lower and a_high_sl6 * time > 0 ? 0 : a_line_cross(close, a_high_x6, a_high_y6, a_high_sl6, log_chart)
+a_cross_low6 = not a_Rising_Upper_Falling_Lower and a_low_sl6 * time < 0 ? 0 : a_line_cross(close, a_low_x6, a_low_y6, a_low_sl6, log_chart)
+a_cross_high7 = not a_Rising_Upper_Falling_Lower and a_high_sl7 * time > 0 ? 0 : a_line_cross(close, a_high_x7, a_high_y7, a_high_sl7, log_chart)
+a_cross_low7 = not a_Rising_Upper_Falling_Lower and a_low_sl7 * time < 0 ? 0 : a_line_cross(close, a_low_x7, a_low_y7, a_low_sl7, log_chart)
+a_cross_high8 = not a_Rising_Upper_Falling_Lower and a_high_sl8 * time > 0 ? 0 : a_line_cross(close, a_high_x8, a_high_y8, a_high_sl8, log_chart)
+a_cross_low8 = not a_Rising_Upper_Falling_Lower and a_low_sl8 * time < 0 ? 0 : a_line_cross(close, a_low_x8, a_low_y8, a_low_sl8, log_chart)
+a_cross_high9 = not a_Rising_Upper_Falling_Lower and a_high_sl9 * time > 0 ? 0 : a_line_cross(close, a_high_x9, a_high_y9, a_high_sl9, log_chart)
+a_cross_low9 = not a_Rising_Upper_Falling_Lower and a_low_sl9 * time < 0 ? 0 : a_line_cross(close, a_low_x9, a_low_y9, a_low_sl9, log_chart)
+
+a_long_break = (a_trendline_nr > 9 ? a_cross_high9 == 1 or (a_select_breaks ? false : a_cross_low9 == 1) : false) or (a_trendline_nr > 8 ? a_cross_high8 == 1 or (a_select_breaks ? false : a_cross_low8 == 1) : false) or (a_trendline_nr > 7 ? a_cross_high7 == 1 or (a_select_breaks ? false : a_cross_low7 == 1) : false) or (a_trendline_nr > 6 ? a_cross_high6 == 1 or (a_select_breaks ? false : a_cross_low6 == 1) : false) or (a_trendline_nr > 5 ? a_cross_high5 == 1 or (a_select_breaks ? false : a_cross_low5 == 1) : false) or (a_trendline_nr > 4 ? a_cross_high4 == 1 or (a_select_breaks ? false : a_cross_low4 == 1) : false) or (a_trendline_nr > 3 ? a_cross_high3 == 1 or (a_select_breaks ? false : a_cross_low3 == 1) : false) or (a_trendline_nr > 2 ? a_cross_high2 == 1 or (a_select_breaks ? false : a_cross_low2 == 1) : false) or (a_trendline_nr > 1 ? a_cross_high1 == 1 or (a_select_breaks ? false : a_cross_low1 == 1) : false) or a_cross_high0 == 1 or (a_select_breaks ? false : a_cross_low0 == 1)
+a_short_break = (a_trendline_nr > 9 ? (a_select_breaks ? false : a_cross_high9 == -1) or a_cross_low9 == -1 : false) or (a_trendline_nr > 8 ? (a_select_breaks ? false : a_cross_high8 == -1) or a_cross_low8 == -1 : false) or (a_trendline_nr > 7 ? (a_select_breaks ? false : a_cross_high7 == -1) or a_cross_low7 == -1 : false) or (a_trendline_nr > 6 ? (a_select_breaks ? false : a_cross_high6 == -1) or a_cross_low6 == -1 : false) or (a_trendline_nr > 5 ? (a_select_breaks ? false : a_cross_high5 == -1) or a_cross_low5 == -1 : false) or (a_trendline_nr > 4 ? (a_select_breaks ? false : a_cross_high4 == -1) or a_cross_low4 == -1 : false) or (a_trendline_nr > 3 ? (a_select_breaks ? false : a_cross_high3 == -1) or a_cross_low3 == -1 : false) or (a_trendline_nr > 2 ? (a_select_breaks ? false : a_cross_high2 == -1) or a_cross_low2 == -1 : false) or (a_trendline_nr > 1 ? (a_select_breaks ? false : a_cross_high1 == -1) or a_cross_low1 == -1 : false) or (a_select_breaks ? false : a_cross_high0 == -1) or a_cross_low0 == -1
+
+plotshape(a_Show_Breaks == 'Triangles' or a_Show_Breaks == 'Triangles + Barcolor' ? a_long_break ? close : na : na, title='cross_high', style=shape.triangleup, size=size.small, location=location.belowbar, color=color.new(#c6e163, 0))
+plotshape(a_Show_Breaks == 'Triangles' or a_Show_Breaks == 'Triangles + Barcolor' ? a_short_break ? close : na : na, title='cross_low', style=shape.triangledown, size=size.small, location=location.abovebar, color=color.new(color.fuchsia, 0))
+
+// Secondary Trendlines
+b_Extension_Multiplier = b_Extensions == '  25' ? 1 : b_Extensions == '  50' ? 2 : b_Extensions == '  75' ? 3 : b_Extensions == ' 100' ? 4 : b_Extensions == ' 150' ? 6 : b_Extensions == ' 200' ? 8 : b_Extensions == ' 300' ? 12 : b_Extensions == ' 400' ? 16 : b_Extensions == ' 500' ? 20 : b_Extensions == ' 750' ? 30 : b_Extensions == '1000' ? 40 : b_Extensions == 'Infinate' ? 0 : na
+
+b_f_trendline(b__input_function, b__delay, b__only_up, b__extend) =>
+    var int b_Ax = 1
+    var int b_Bx = 1
+    var float b_By = 0.0
+    var float b_slope = 0.0
+    b_Ay = fixnan(b__input_function)
+    if ta.change(b_Ay) != 0
+        b_Ax := time[b__delay]
+        b_By := b_Ay[1]
+        b_Bx := b_Ax[1]
+        b_slope := log_chart ? (math.log(b_Ay) - math.log(b_By)) / (b_Ax - b_Bx) : (b_Ay - b_By) / (b_Ax - b_Bx)
+        b_slope
+    else
+        b_Ax := b_Ax[1]
+        b_Bx := b_Bx[1]
+        b_By := b_By[1]
+        b_By
+    var line b_trendline = na
+    var int b_Axbis = 0
+    var float b_Aybis = 0.0
+    var bool b__xtend = true
+    b_extension_time = b_Extension_Multiplier * b_bar_time * 25
+    b_Axbis := b_Ax + b_extension_time
+    b_Aybis := log_chart ? b_Ay * math.exp(b_extension_time * b_slope) : b_Ay + b_extension_time * b_slope
+    if b_Extension_Multiplier != 0
+        b__xtend := false
+        b__xtend
+    if ta.change(b_Ay) != 0
+        b_line_color_Rising_Falling = b_slope * time < 0 ? b__only_up ? b_Rising_Upper_Falling_Lower ? a_Color_Type == 'Colored' ? color.gray : color.teal : na : a_Color_Type == 'Colored' ? color.green : color.teal : b__only_up ? a_Color_Type == 'Colored' ? color.red : color.teal : b_Rising_Upper_Falling_Lower ? a_Color_Type == 'Colored' ? color.gray : color.teal : na
+        b_line_color_Not_Rising_Falling = b_slope * time < 0 ? b__only_up ? na : a_Color_Type == 'Colored' ? color.green : color.teal : b__only_up ? a_Color_Type == 'Colored' ? color.red : color.teal : na
+        b_line_color = b_Show_Secondary and not b_Rising_Upper_Falling_Lower ? b_line_color_Not_Rising_Falling : b_Show_Secondary and b_Rising_Upper_Falling_Lower ? b_line_color_Rising_Falling : na
+
+        if not na(b_line_color)
+            b_trendline := line.new(b_Bx, b_By, b_Axbis, b_Aybis, xloc.bar_time, extend=b__xtend ? extend.right : extend.none, color=b_line_color, style=b_Line_Type, width=b_width)
+            b_trendline
+    [b_Bx, b_By, b_Axbis, b_Aybis, b_slope]
+
+b_line_get_price(b__start_time, b__start_price, b__slope, b__lookback_period, b__log_chart) =>
+    var float b_current_price = 0.0
+    b_elapsed_time = time - b__start_time
+    b_current_price := b__log_chart ? b__start_price * math.exp((b_elapsed_time - b__lookback_period * b_bar_time) * b__slope) : b__start_price + (b_elapsed_time - b__lookback_period * b_bar_time) * b__slope
+    b_current_price
+
+b_line_cross(b__check_value, b__start_time, b__start_price, b__slope, b__log_chart) =>
+    var float b_current_value = 0.0
+    var float b_previous_value = 0.0
+    b_current_value := b_line_get_price(b__start_time, b__start_price, b__slope, 0, b__log_chart)
+    b_previous_value := b_line_get_price(b__start_time, b__start_price, b__slope, 1, b__log_chart)
+    b_cross = b__check_value[1] < b_previous_value and b__check_value > b_current_value ? 1 : b__check_value[1] > b_previous_value and b__check_value < b_current_value ? -1 : 0
+    b_cross
+
+int b_delay_int = int(b_len / 2)
+b_high_point = ta.pivothigh(b_Wicks == 'Wicks' ? high : close > open ? close : open, b_len, b_delay_int)
+b_low_point = ta.pivotlow(b_Wicks == 'Wicks' ? low : close > open ? open : close, b_len, b_delay_int)
+
+[b_phx1, b_phy1, b_phx2, b_phy2, b_slope_high] = b_f_trendline(b_high_point, b_delay_int, false, true)
+[b_plx1, b_ply1, b_plx2, b_ply2, b_slope_low] = b_f_trendline(b_low_point, b_delay_int, true, true)
+
+var int b_high_x0 = 0, var float b_high_y0 = 0.0, var float b_high_sl0 = 0.0
+var int b_high_x1 = 0, var float b_high_y1 = 0.0, var float b_high_sl1 = 0.0
+var int b_high_x2 = 0, var float b_high_y2 = 0.0, var float b_high_sl2 = 0.0
+var int b_high_x3 = 0, var float b_high_y3 = 0.0, var float b_high_sl3 = 0.0
+var int b_high_x4 = 0, var float b_high_y4 = 0.0, var float b_high_sl4 = 0.0
+var int b_high_x5 = 0, var float b_high_y5 = 0.0, var float b_high_sl5 = 0.0
+var int b_high_x6 = 0, var float b_high_y6 = 0.0, var float b_high_sl6 = 0.0
+var int b_high_x7 = 0, var float b_high_y7 = 0.0, var float b_high_sl7 = 0.0
+var int b_high_x8 = 0, var float b_high_y8 = 0.0, var float b_high_sl8 = 0.0
+var int b_high_x9 = 0, var float b_high_y9 = 0.0, var float b_high_sl9 = 0.0
+
+var int b_low_x0 = 0, var float b_low_y0 = 0.0, var float b_low_sl0 = 0.0
+var int b_low_x1 = 0, var float b_low_y1 = 0.0, var float b_low_sl1 = 0.0
+var int b_low_x2 = 0, var float b_low_y2 = 0.0, var float b_low_sl2 = 0.0
+var int b_low_x3 = 0, var float b_low_y3 = 0.0, var float b_low_sl3 = 0.0
+var int b_low_x4 = 0, var float b_low_y4 = 0.0, var float b_low_sl4 = 0.0
+var int b_low_x5 = 0, var float b_low_y5 = 0.0, var float b_low_sl5 = 0.0
+var int b_low_x6 = 0, var float b_low_y6 = 0.0, var float b_low_sl6 = 0.0
+var int b_low_x7 = 0, var float b_low_y7 = 0.0, var float b_low_sl7 = 0.0
+var int b_low_x8 = 0, var float b_low_y8 = 0.0, var float b_low_sl8 = 0.0
+var int b_low_x9 = 0, var float b_low_y9 = 0.0, var float b_low_sl9 = 0.0
+
+if ta.change(fixnan(b_high_point)) != 0
+    b_high_x9 := b_high_x8, b_high_y9 := b_high_y8, b_high_sl9 := b_high_sl8
+    b_high_x8 := b_high_x7, b_high_y8 := b_high_y7, b_high_sl8 := b_high_sl7
+    b_high_x7 := b_high_x6, b_high_y7 := b_high_y6, b_high_sl7 := b_high_sl6
+    b_high_x6 := b_high_x5, b_high_y6 := b_high_y5, b_high_sl6 := b_high_sl5
+    b_high_x5 := b_high_x4, b_high_y5 := b_high_y4, b_high_sl5 := b_high_sl4
+    b_high_x4 := b_high_x3, b_high_y4 := b_high_y3, b_high_sl4 := b_high_sl3
+    b_high_x3 := b_high_x2, b_high_y3 := b_high_y2, b_high_sl3 := b_high_sl2
+    b_high_x2 := b_high_x1, b_high_y2 := b_high_y1, b_high_sl2 := b_high_sl1
+    b_high_x1 := b_high_x0, b_high_y1 := b_high_y0, b_high_sl1 := b_high_sl0
+    b_high_x0 := b_phx1, b_high_y0 := b_phy1, b_high_sl0 := b_slope_high
+
+if ta.change(fixnan(b_low_point)) != 0
+    b_low_x9 := b_low_x8, b_low_y9 := b_low_y8, b_low_sl9 := b_low_sl8
+    b_low_x8 := b_low_x7, b_low_y8 := b_low_y7, b_low_sl8 := b_low_sl7
+    b_low_x7 := b_low_x6, b_low_y7 := b_low_y6, b_low_sl7 := b_low_sl6
+    b_low_x6 := b_low_x5, b_low_y6 := b_low_y5, b_low_sl6 := b_low_sl5
+    b_low_x5 := b_low_x4, b_low_y5 := b_low_y4, b_low_sl5 := b_low_sl4
+    b_low_x4 := b_low_x3, b_low_y4 := b_low_y3, b_low_sl4 := b_low_sl3
+    b_low_x3 := b_low_x2, b_low_y3 := b_low_y2, b_low_sl3 := b_low_sl2
+    b_low_x2 := b_low_x1, b_low_y2 := b_low_y1, b_low_sl2 := b_low_sl1
+    b_low_x1 := b_low_x0, b_low_y1 := b_low_y0, b_low_sl1 := b_low_sl0
+    b_low_x0 := b_plx1, b_low_y0 := b_ply1, b_low_sl0 := b_slope_low
+
+b_cross_high0 = not b_Rising_Upper_Falling_Lower and b_high_sl0 * time > 0 ? 0 : b_line_cross(close, b_high_x0, b_high_y0, b_high_sl0, log_chart)
+b_cross_low0 = not b_Rising_Upper_Falling_Lower and b_low_sl0 * time < 0 ? 0 : b_line_cross(close, b_low_x0, b_low_y0, b_low_sl0, log_chart)
+b_cross_high1 = not b_Rising_Upper_Falling_Lower and b_high_sl1 * time > 0 ? 0 : b_line_cross(close, b_high_x1, b_high_y1, b_high_sl1, log_chart)
+b_cross_low1 = not b_Rising_Upper_Falling_Lower and b_low_sl1 * time < 0 ? 0 : b_line_cross(close, b_low_x1, b_low_y1, b_low_sl1, log_chart)
+b_cross_high2 = not b_Rising_Upper_Falling_Lower and b_high_sl2 * time > 0 ? 0 : b_line_cross(close, b_high_x2, b_high_y2, b_high_sl2, log_chart)
+b_cross_low2 = not b_Rising_Upper_Falling_Lower and b_low_sl2 * time < 0 ? 0 : b_line_cross(close, b_low_x2, b_low_y2, b_low_sl2, log_chart)
+b_cross_high3 = not b_Rising_Upper_Falling_Lower and b_high_sl3 * time > 0 ? 0 : b_line_cross(close, b_high_x3, b_high_y3, b_high_sl3, log_chart)
+b_cross_low3 = not b_Rising_Upper_Falling_Lower and b_low_sl3 * time < 0 ? 0 : b_line_cross(close, b_low_x3, b_low_y3, b_low_sl3, log_chart)
+b_cross_high4 = not b_Rising_Upper_Falling_Lower and b_high_sl4 * time > 0 ? 0 : b_line_cross(close, b_high_x4, b_high_y4, b_high_sl4, log_chart)
+b_cross_low4 = not b_Rising_Upper_Falling_Lower and b_low_sl4 * time < 0 ? 0 : b_line_cross(close, b_low_x4, b_low_y4, b_low_sl4, log_chart)
+b_cross_high5 = not b_Rising_Upper_Falling_Lower and b_high_sl5 * time > 0 ? 0 : b_line_cross(close, b_high_x5, b_high_y5, b_high_sl5, log_chart)
+b_cross_low5 = not b_Rising_Upper_Falling_Lower and b_low_sl5 * time < 0 ? 0 : b_line_cross(close, b_low_x5, b_low_y5, b_low_sl5, log_chart)
+b_cross_high6 = not b_Rising_Upper_Falling_Lower and b_high_sl6 * time > 0 ? 0 : b_line_cross(close, b_high_x6, b_high_y6, b_high_sl6, log_chart)
+b_cross_low6 = not b_Rising_Upper_Falling_Lower and b_low_sl6 * time < 0 ? 0 : b_line_cross(close, b_low_x6, b_low_y6, b_low_sl6, log_chart)
+b_cross_high7 = not b_Rising_Upper_Falling_Lower and b_high_sl7 * time > 0 ? 0 : b_line_cross(close, b_high_x7, b_high_y7, b_high_sl7, log_chart)
+b_cross_low7 = not b_Rising_Upper_Falling_Lower and b_low_sl7 * time < 0 ? 0 : b_line_cross(close, b_low_x7, b_low_y7, b_low_sl7, log_chart)
+b_cross_high8 = not b_Rising_Upper_Falling_Lower and b_high_sl8 * time > 0 ? 0 : b_line_cross(close, b_high_x8, b_high_y8, b_high_sl8, log_chart)
+b_cross_low8 = not b_Rising_Upper_Falling_Lower and b_low_sl8 * time < 0 ? 0 : b_line_cross(close, b_low_x8, b_low_y8, b_low_sl8, log_chart)
+b_cross_high9 = not b_Rising_Upper_Falling_Lower and b_high_sl9 * time > 0 ? 0 : b_line_cross(close, b_high_x9, b_high_y9, b_high_sl9, log_chart)
+b_cross_low9 = not b_Rising_Upper_Falling_Lower and b_low_sl9 * time < 0 ? 0 : b_line_cross(close, b_low_x9, b_low_y9, b_low_sl9, log_chart)
+
+b_long_break = (b_trendline_nr > 9 ? b_cross_high9 == 1 or (b_select_breaks ? false : b_cross_low9 == 1) : false) or (b_trendline_nr > 8 ? b_cross_high8 == 1 or (b_select_breaks ? false : b_cross_low8 == 1) : false) or (b_trendline_nr > 7 ? b_cross_high7 == 1 or (b_select_breaks ? false : b_cross_low7 == 1) : false) or (b_trendline_nr > 6 ? b_cross_high6 == 1 or (b_select_breaks ? false : b_cross_low6 == 1) : false) or (b_trendline_nr > 5 ? b_cross_high5 == 1 or (b_select_breaks ? false : b_cross_low5 == 1) : false) or (b_trendline_nr > 4 ? b_cross_high4 == 1 or (b_select_breaks ? false : b_cross_low4 == 1) : false) or (b_trendline_nr > 3 ? b_cross_high3 == 1 or (b_select_breaks ? false : b_cross_low3 == 1) : false) or (b_trendline_nr > 2 ? b_cross_high2 == 1 or (b_select_breaks ? false : b_cross_low2 == 1) : false) or (b_trendline_nr > 1 ? b_cross_high1 == 1 or (b_select_breaks ? false : b_cross_low1 == 1) : false) or b_cross_high0 == 1 or (b_select_breaks ? false : b_cross_low0 == 1)
+b_short_break = (b_trendline_nr > 9 ? (b_select_breaks ? false : b_cross_high9 == -1) or b_cross_low9 == -1 : false) or (b_trendline_nr > 8 ? (b_select_breaks ? false : b_cross_high8 == -1) or b_cross_low8 == -1 : false) or (b_trendline_nr > 7 ? (b_select_breaks ? false : b_cross_high7 == -1) or b_cross_low7 == -1 : false) or (b_trendline_nr > 6 ? (b_select_breaks ? false : b_cross_high6 == -1) or b_cross_low6 == -1 : false) or (b_trendline_nr > 5 ? (b_select_breaks ? false : b_cross_high5 == -1) or b_cross_low5 == -1 : false) or (b_trendline_nr > 4 ? (b_select_breaks ? false : b_cross_high4 == -1) or b_cross_low4 == -1 : false) or (b_trendline_nr > 3 ? (b_select_breaks ? false : b_cross_high3 == -1) or b_cross_low3 == -1 : false) or (b_trendline_nr > 2 ? (b_select_breaks ? false : b_cross_high2 == -1) or b_cross_low2 == -1 : false) or (b_trendline_nr > 1 ? (b_select_breaks ? false : b_cross_high1 == -1) or b_cross_low1 == -1 : false) or (b_select_breaks ? false : b_cross_high0 == -1) or b_cross_low0 == -1
+
+plotshape(b_Show_Breaks == 'Triangles' or b_Show_Breaks == 'Triangles + Barcolor' ? b_long_break ? close : na : na, title='cross_high', style=shape.triangleup, size=size.small, location=location.belowbar, color=color.new(#c6e163, 0))
+plotshape(b_Show_Breaks == 'Triangles' or b_Show_Breaks == 'Triangles + Barcolor' ? b_short_break ? close : na : na, title='cross_low', style=shape.triangledown, size=size.small, location=location.abovebar, color=color.new(color.fuchsia, 0))
+
+// ==========================================
+// TREND CANDLES
+// ==========================================
+haclose = ohlc4
+haopen = 0.0
+haopen := na(haopen[1]) ? (open + close) / 2 : (haopen[1] + haclose[1]) / 2
+ccolor = haclose - haopen > 0 ? 1 : 0
+
+inside1 = haopen <= math.max(haopen[1], haclose[1]) and haopen >= math.min(haopen[1], haclose[1]) and haclose <= math.max(haopen[1], haclose[1]) and haclose >= math.min(haopen[1], haclose[1]) ? 1 : 0
+colorvalue = inside1 ? ccolor[1] : ccolor
+Trend_Candle_Color = colorvalue ? color.lime : color.red
+barcolor(ShowTrendCandles ? Trend_Candle_Color : na, title='Trend Candles')
+
+// ==========================================
+// SUPPORT / RESISTANCE ZONES
+// ==========================================
+TF1 = timeframe.period
+TF1_Vol = request.security(syminfo.tickerid, TF1, volume)
+TF1_VolMA = ta.sma(TF1_Vol, 6)
+TF1_High = request.security(syminfo.tickerid, TF1, high)
+TF1_Low = request.security(syminfo.tickerid, TF1, low)
+TF1_Open = request.security(syminfo.tickerid, TF1, open)
+TF1_Close = request.security(syminfo.tickerid, TF1, close)
+
+TF1_Up = TF1_High[3] > TF1_High[4] and TF1_High[4] > TF1_High[5] and TF1_High[2] < TF1_High[3] and TF1_High[1] < TF1_High[2] and TF1_Vol[3] > TF1_VolMA[3]
+TF1_Down = TF1_Low[3] < TF1_Low[4] and TF1_Low[4] < TF1_Low[5] and TF1_Low[2] > TF1_Low[3] and TF1_Low[1] > TF1_Low[2] and TF1_Vol[3] > TF1_VolMA[3]
+
+TF1_CalcFractalUp() =>
+    TF1_FractalUp = 0.0
+    TF1_FractalUp := TF1_Up ? TF1_High[3] : TF1_FractalUp[1]
+    TF1_FractalUp
+
+TF1_CalcFractalDown() =>
+    TF1_FractalDown = 0.0
+    TF1_FractalDown := TF1_Down ? TF1_Low[3] : TF1_FractalDown[1]
+    TF1_FractalDown
+
+TF1_FractalUp = request.security(syminfo.tickerid, TF1, TF1_CalcFractalUp())
+TF1_FractalDown = request.security(syminfo.tickerid, TF1, TF1_CalcFractalDown())
+
+TF1_CalcFractalUpLowerZone() =>
+    TF1_FractalUpLowerZone = 0.0
+    TF1_FractalUpLowerZone := TF1_Up and TF1_Close[3] > TF1_Open[3] ? TF1_Close[3] : TF1_Up and TF1_Close[3] < TF1_Open[3] ? TF1_Open[3] : TF1_FractalUpLowerZone[1]
+    TF1_FractalUpLowerZone
+
+TF1_CalcFractalUpUpperZone() =>
+    TF1_FractalUpUpperZone = 0.0
+    TF1_FractalUpUpperZone := TF1_Up and TF1_Close[3] > TF1_Open[3] ? TF1_High[3] - TF1_Close[3] + TF1_High[3] : TF1_Up and TF1_Close[3] < TF1_Open[3] ? TF1_High[3] - TF1_Open[3] + TF1_High[3] : TF1_FractalUpUpperZone[1]
+    TF1_FractalUpUpperZone
+
+TF1_FractalUpLowerZone = request.security(syminfo.tickerid, TF1, TF1_CalcFractalUpLowerZone())
+TF1_FractalUpUpperZone = request.security(syminfo.tickerid, TF1, TF1_CalcFractalUpUpperZone())
+
+TF1_CalcFractalDownUpperZone() =>
+    TF1_FractalDownUpperZone = 0.0
+    TF1_FractalDownUpperZone := TF1_Down and TF1_Close[3] > TF1_Open[3] ? TF1_Open[3] : TF1_Down and TF1_Close[3] < TF1_Open[3] ? TF1_Close[3] : TF1_FractalDownUpperZone[1]
+    TF1_FractalDownUpperZone
+
+TF1_CalcFractalDownLowerZone() =>
+    TF1_FractalDownLowerZone = 0.0
+    TF1_FractalDownLowerZone := TF1_Down and TF1_Close[3] > TF1_Open[3] ? TF1_Low[3] + TF1_Low[3] - TF1_Open[3] : TF1_Down and TF1_Close[3] < TF1_Open[3] ? TF1_Low[3] + TF1_Low[3] - TF1_Close[3] : TF1_FractalDownLowerZone[1]
+    TF1_FractalDownLowerZone
+
+TF1_FractalDownLowerZone = request.security(syminfo.tickerid, TF1, TF1_CalcFractalDownLowerZone())
+TF1_FractalDownUpperZone = request.security(syminfo.tickerid, TF1, TF1_CalcFractalDownUpperZone())
+
+TF1_ResistanceColor = not InvertColors ? #FF00008C : #00FF00E6
+TF1_SupportColor = not InvertColors ? #00FF00E6 : #FF00008C
+
+TF1_ResZoneColor = TF1_FractalUp != TF1_FractalUp[1] ? na : color.red
+TF1_ResZoneColorInverted = TF1_FractalUp != TF1_FractalUp[1] ? na : color.lime
+TF1_SupZoneColor = TF1_FractalDown != TF1_FractalDown[1] ? na : color.lime
+TF1_SupZoneColorInverted = TF1_FractalDown != TF1_FractalDown[1] ? na : color.red
+
+TF1_ResistanceZonesColor = not InvertColors ? TF1_ResZoneColor : TF1_ResZoneColorInverted
+TF1_SupportZonesColor = not InvertColors ? TF1_SupZoneColor : TF1_SupZoneColorInverted
+
+TF1_ResistanceUpZone = plot(ShowSupResZones ? TF1_FractalUpUpperZone : na, 'Resistance Upper Zone', color=TF1_ResistanceZonesColor)
+TF1_ResistanceDownZone = plot(ShowSupResZones ? TF1_FractalUpLowerZone : na, 'Resistance Lower Zone', color=TF1_ResistanceZonesColor)
+fill(TF1_ResistanceUpZone, TF1_ResistanceDownZone, color=TF1_ResistanceZonesColor, title='Resistance Zone Shading')
+
+TF1_SupportUpZone = plot(ShowSupResZones ? TF1_FractalDownUpperZone : na, 'Support Upper Zone', color=TF1_SupportZonesColor)
+TF1_SupportDownZone = plot(ShowSupResZones ? TF1_FractalDownLowerZone : na, 'Support Lower Zone', color=TF1_SupportZonesColor)
+fill(TF1_SupportUpZone, TF1_SupportDownZone, color=TF1_SupportZonesColor, title='Support Zone Shading')
+
+// ==========================================
+// CENTRAL PIVOT RANGE (CPR)
+// ==========================================
+showTomorrowCPR   = input.bool(title='Show tomorrow\'s CPR', defval=true, group='CPR')
+showHistoricalCPR = input.bool(title='Show historical CPR', defval=false, group='CPR')
+showR3S3          = input.bool(title='Show R3 & S3', defval=false, group='CPR')
+
+cprColor = color.yellow
+rColor   = color.fuchsia
+sColor   = color.aqua
+
+IsHoliday(_date) =>
+    iff_1 = _date == timestamp(2020, 12, 25, 9, 15) ? true : false
+    iff_2 = _date == timestamp(2020, 11, 30, 9, 15) ? true : iff_1
+    iff_3 = _date == timestamp(2020, 11, 16, 9, 15) ? true : iff_2
+    _date == timestamp(2020, 10, 2, 9, 15) ? true : iff_3
+
+IsWeekend(_date) =>
+    dayofweek(_date) == 7 or dayofweek(_date) == 1
+
+SkipWeekend(_date) =>
+    _d = dayofweek(_date)
+    _mul = _d == 6 ? 3 : _d == 7 ? 2 : 1
+    _date + _mul * 86400000
+
+GetNextWorkingDay(_date) =>
+    _dt = SkipWeekend(_date)
+    for i = 1 to 12 by 1
+        if IsHoliday(_dt)
+            _dt := SkipWeekend(_dt)
+            continue
+        else
+            break
+    _dt
+
+y = year(timenow)
+m = month(timenow)
+d = dayofmonth(timenow)
+
+start = timestamp(y, m, d, 9, 15)
+end = start + 86400000
+shouldPlotToday = timenow > start
+
+tom_start = start
+tom_end = end
+
+if shouldPlotToday
+    tom_start := GetNextWorkingDay(start)
+    tom_end := tom_start + 86400000
+
+getSeries(e, timeFrame) =>
+    request.security(syminfo.tickerid, 'D', e, lookahead=barmerge.lookahead_on)
+
+H = getSeries(high[1], 'D')
+L = getSeries(low[1], 'D')
+C = getSeries(close[1], 'D')
+
+P = (H + L + C) / 3
+TC = (H + L) / 2
+BC = P - TC + P
+
+R3 = H + 2 * (P - L)
+R2 = P + H - L
+R1 = P * 2 - L
+S1 = P * 2 - H
+S2 = P - (H - L)
+S3 = L - 2 * (H - P)
+
+p_cprTC = plot(showHistoricalCPR ? TC : na, title=' CTC', color=cprColor)
+p_cprBC = plot(showHistoricalCPR ? BC : na, title=' CBC', color=cprColor)
+fill(p_cprTC, p_cprBC, color=color.purple, transp=95)
+
+// ==========================================
+// RSI PIVOTS & MARKET STRUCTURE TRACKING (HH, LH, HL, LL)
+// ==========================================
+rsiSource     = input.source(title='RSI Source', defval=close, group='Pivot Structure')
+rsiLength     = input.int(title='RSI Length', defval=7, group='Pivot Structure')
+rsiOverbought = input.int(title='RSI Overbought', defval=70, minval=51, maxval=100, group='Pivot Structure')
+rsiOvesold    = input.int(title='RSI Oversold', defval=30, minval=1, maxval=49, group='Pivot Structure')
+
+rsiValue     = ta.rsi(rsiSource, rsiLength)
+isOverbought = rsiValue >= rsiOverbought
+isOversold   = rsiValue <= rsiOvesold
+
+var laststate = 0
+var hh = low
+var ll = high
+
+var label labelll = na
+var label labelhh = na
+var line line_up = na
+var line line_down = na
+
+var last_actual_label_hh_price = 0.0
+var last_actual_label_ll_price = 0.0
+
+obLabelText() =>
+    if last_actual_label_hh_price < high
+        'HH'
+    else
+        'LH'
+
+osLabelText() =>
+    if last_actual_label_ll_price < low
+        'HL'
+    else
+        'LL'
+
+createOverBoughtLabel(isIt) =>
+    if isIt
+        label.new(x=bar_index, y=high, yloc=yloc.abovebar, style=label.style_label_down, color=color.red, size=size.tiny, text=obLabelText())
+    else
+        label.new(x=bar_index, y=low, yloc=yloc.belowbar, style=label.style_label_up, color=color.green, size=size.tiny, text=osLabelText())
+
+moveOversoldLabel() =>
+    label.set_x(labelll, bar_index)
+    label.set_y(labelll, low)
+    label.set_text(labelll, osLabelText())
+    line.set_x1(line_down, bar_index)
+    line.set_y1(line_down, low)
+
+moveOverBoughtLabel() =>
+    label.set_x(labelhh, bar_index)
+    label.set_y(labelhh, high)
+    label.set_text(labelhh, obLabelText())
+    line.set_x1(line_up, bar_index)
+    line.set_y1(line_up, high)
+
+if laststate == 2 and isOverbought
+    hh := high
+    labelhh := createOverBoughtLabel(true)
+    last_actual_label_ll_price := low
+    labelll_ts = label.get_x(labelll)
+    labelll_price = low
+    line_up := line.new(x1=bar_index, y1=high, x2=labelll_ts, y2=labelll_price, width=1)
+
+if laststate == 1 and isOversold
+    ll := low
+    labelll := createOverBoughtLabel(false)
+    last_actual_label_hh_price := high
+    labelhh_ts = label.get_x(labelhh)
+    labelhh_price = high
+    line_down := line.new(x1=bar_index, y1=low, x2=labelhh_ts, y2=labelhh_price, width=1)
+
+if isOverbought
+    if high >= hh
+        hh := high
+        moveOverBoughtLabel()
+    laststate := 1
+
+if isOversold
+    if low <= ll
+        ll := low
+        moveOversoldLabel()
+    laststate := 2
+
+if laststate == 1 and isOverbought
+    if hh <= high
+        hh := high
+        moveOverBoughtLabel()
+
+if laststate == 2 and isOversold
+    if low <= ll
+        ll := low
+        moveOversoldLabel()
+
+if laststate == 1
+    if hh <= high
+        hh := high
+        moveOverBoughtLabel()
+
+if laststate == 2
+    if ll >= low
+        ll := low
+        moveOversoldLabel()
+
+// ==========================================
+// 1-MIN PIVOTS & MARKET STRUCTURE FOR 3-STEP SCALPING
+// ==========================================
+p_high = ta.pivothigh(high, 2, 2)
+p_low  = ta.pivotlow(low, 2, 2)
+
+var float last_confirmed_hh = na
+var float last_confirmed_lh = na
+var float last_confirmed_hl = na
+var float last_confirmed_ll = na
+var float last_confirmed_high = na
+var float last_confirmed_low = na
+
+if not na(p_high)
+    ph_val = p_high
+    if na(last_confirmed_high) or ph_val > last_confirmed_high
+        last_confirmed_hh := ph_val
+    else
+        last_confirmed_lh := ph_val
+    last_confirmed_high := ph_val
+
+if not na(p_low)
+    pl_val = p_low
+    if na(last_confirmed_low) or pl_val > last_confirmed_low
+        last_confirmed_hl := pl_val
+    else
+        last_confirmed_ll := pl_val
+    last_confirmed_low := pl_val
+
+// Reference prior bar's confirmed structure to avoid self-evaluation bug
+ref_hh = not na(last_confirmed_hh[1]) ? last_confirmed_hh[1] : last_confirmed_high[1]
+ref_ll = not na(last_confirmed_ll[1]) ? last_confirmed_ll[1] : last_confirmed_low[1]
+
+// Step 1: Liquidity Sweep (Fakeout Capture)
+var bool bearish_sweep_active = false
+var bool bullish_sweep_active = false
+
+if not na(ref_hh) and high > ref_hh and close < ref_hh
+    bearish_sweep_active := true
+
+if not na(ref_ll) and low < ref_ll and close > ref_ll
+    bullish_sweep_active := true
+
+// Step 2: 1-Min Body Break (The Trigger)
+ref_hl = not na(last_confirmed_hl[1]) ? last_confirmed_hl[1] : last_confirmed_low[1]
+ref_lh = not na(last_confirmed_lh[1]) ? last_confirmed_lh[1] : last_confirmed_high[1]
+
+bearish_body_break = not na(ref_hl) and close < ref_hl and close < open
+bullish_body_break = not na(ref_lh) and close > ref_lh and close > open
+
+// Step 3: EMA 9 and EMA 15 Dynamic Support
+ema_bearish_cross = EMA9_out < EMA15_out
+ema_bullish_cross = EMA9_out > EMA15_out
+
+// Dynamic 3-Step Signals
+sell_signal = (bearish_sweep_active or (not na(ref_hh) and high > ref_hh and close < ref_hh)) and bearish_body_break and ema_bearish_cross and barstate.isconfirmed
+buy_signal  = (bullish_sweep_active or (not na(ref_ll) and low < ref_ll and close > ref_ll)) and bullish_body_break and ema_bullish_cross and barstate.isconfirmed
+
+if sell_signal
+    bearish_sweep_active := false
+
+if buy_signal
+    bullish_sweep_active := false
+
+// ==========================================
+// FIXED FINAL VISUAL SIGNALS & SL/TP
+// ==========================================
+plotshape(buy_signal, title="BUY Signal (1-Min Scalp)", style=shape.labelup, location=location.belowbar, color=color.green, text="BUY ⚡", textcolor=color.white, size=size.normal)
+plotshape(sell_signal, title="SELL Signal (1-Min Scalp)", style=shape.labeldown, location=location.abovebar, color=color.red, text="SELL ⚡", textcolor=color.white, size=size.normal)
+
+// Dynamic Risk-Reward SL and TP Tracking (2 pips = 20 minticks offset, 1:2 RR)
+pip_offset = 20 * syminfo.mintick
+
+var float active_sl = na
+var float active_tp = na
+
+if buy_signal
+    sl_val = not na(ref_ll) ? ref_ll - pip_offset : low - pip_offset
+    risk = close - sl_val
+    tp_val = close + (2.0 * risk)
+    active_sl := sl_val
+    active_tp := tp_val
+
+if sell_signal
+    sl_val = not na(ref_hh) ? ref_hh + pip_offset : high + pip_offset
+    risk = sl_val - close
+    tp_val = close - (2.0 * risk)
+    active_sl := sl_val
+    active_tp := tp_val
+
+plot(active_sl, title="Active Stop Loss (SL)", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(active_tp, title="Active Take Profit (TP)", color=color.green, style=plot.style_linebr, linewidth=2)
+
+// ==========================================
+// FIBONACCI RETRACEMENT
+// ==========================================
+Fibs = input.string('OFF Fibs', options=['Plot Fibs based on Lookback', 'Plot Fibs based on Price Input', 'OFF Fibs'], title='Fibonacci Plot Type', group='Fib Retracement')
+FIBS = Fibs == 'Plot Fibs based on Lookback' ? 1 : Fibs == 'Plot Fibs based on Price Input' ? 2 : Fibs == 'OFF Fibs' ? 3 : na
+
+Foption = input.string(defval='1. Candles', title='Fibonacci Plot Lookback Type', options=['2. Days', '1. Candles'], group='Fib Retracement')
+FP = input.int(defval=100, title='Days/Candles to Lookback', group='Fib Retracement')
+Reverse = input.bool(defval=false, title='Reverse Fibonacci Levels?', group='Fib Retracement')
+ExtraFibs = input.bool(false, 'Show 0.886 and 1.113 Fibs', group='Fib Retracement')
+
+High_input = input.float(0.0, minval=0, title='High - Enter Value', group='Fib Retracement')
+Low_input  = input.float(-1.0, minval=-1, title='Low - Enter Value', group='Fib Retracement')
+
+Bull_Color  = input.color(#008000, title='Support Fibs Color', group='Fib Retracement')
+Bear_Color  = input.color(#ff0000, title='Resistance Fibs Color', group='Fib Retracement')
+CurrentFib  = input.bool(false, 'Show Fib Level of Current Price', group='Fib Retracement')
+Current_Color = input.color(color.orange, title='Current Fib Label Color', group='Fib Retracement')
+LineStyle   = input.string('Dotted', options=['Dotted', 'Solid'], title='Fib Line Style', group='Fib Retracement')
+LineWidth   = input.int(1, minval=1, maxval=3, title='Fib Line Width', group='Fib Retracement')
+Ext         = input.bool(false, 'Extend Lines Left', group='Fib Retracement')
+
+FPeriod = timeframe.isintraday and Foption == '2. Days' ? int(1440 / timeframe.multiplier * FP) : timeframe.isdaily and Foption == '2. Days' ? int(FP / timeframe.multiplier) : Foption == '1. Candles' ? FP : 100
+
+Fhigh = FIBS == 1 ? ta.highest(FPeriod) : FIBS == 2 and High_input == 0 ? ta.highest(high, 100) : FIBS == 2 and High_input != 0 ? High_input : na
+Flow  = FIBS == 1 ? ta.lowest(FPeriod)  : FIBS == 2 and Low_input == -1  ? ta.lowest(low, 100)  : FIBS == 2 and High_input != -1 ? Low_input  : na
+FH    = FIBS == 1 ? ta.highestbars(high, FPeriod) : 1
+FL    = FIBS == 1 ? ta.lowestbars(low, FPeriod)  : 2
+revfibs = not Reverse ? FL > FH : FL < FH
+
+Fib_x(n) =>
+    revfibs ? (Fhigh - Flow) * n + Flow : Fhigh - (Fhigh - Flow) * n
+
+Current = revfibs ? (close - Flow) / (Fhigh - Flow) : (Fhigh - close) / (Fhigh - Flow)
+
+var label Current_Fib_Label = na
+label.delete(Current_Fib_Label)
+
+if CurrentFib and barstate.islast
+    Current_Fib_Label := label.new(bar_index, close, str.tostring(Current, '##.##'), textcolor=Current_Color, color=color.new(#000000, 100), style=label.style_label_left, yloc=yloc.price)
+
+EXTEND = Ext ? extend.left : extend.none
+STYLE  = LineStyle == 'Dotted' ? line.style_dotted : line.style_solid
+WIDTH  = LineWidth
+
+BB = FIBS == 1 ? FL < FH ? bar_index[-FL] : bar_index[-FH] : bar_index[50]
+
+Fib_line(x) =>
+    var line ln = na
+    line.delete(ln)
+    if not na(x)
+        ln := line.new(BB, x, bar_index, x, color=close > x ? Bull_Color : Bear_Color, extend=EXTEND, style=STYLE, width=WIDTH)
+    ln
+
+Fib_label(x, _txt) =>
+    var label lbl = na
+    label.delete(lbl)
+    if not na(x)
+        lbl := label.new(bar_index, x, _txt + str.tostring(x, '##.########') + ' )', textcolor=close > x ? Bull_Color : Bear_Color, color=color.new(#000000, 100), style=label.style_label_left, yloc=yloc.price)
+    lbl
+
+if FIBS != 3
+    Fib0    = Fib_line(Fib_x(0))
+    Fib236  = Fib_line(Fib_x(0.236))
+    Fib382  = Fib_line(Fib_x(0.382))
+    Fib500  = Fib_line(Fib_x(0.500))
+    Fib618  = Fib_line(Fib_x(0.618))
+    Fib786  = Fib_line(Fib_x(0.786))
+    Fib1000 = Fib_line(Fib_x(1.000))
+
+    LFib0    = Fib_label(Fib_x(0), '0 ( ')
+    LFib236  = Fib_label(Fib_x(0.236), '0.236 ( ')
+    LFib382  = Fib_label(Fib_x(0.382), '0.382 ( ')
+    LFib500  = Fib_label(Fib_x(0.500), '0.500 ( ')
+    LFib618  = Fib_label(Fib_x(0.618), '0.618 ( ')
+    LFib786  = Fib_label(Fib_x(0.786), '0.786 ( ')
+    LFib1000 = Fib_label(Fib_x(1.000), '1.000 ( ')
+
+// ==========================================
+// ALERTS
+// ==========================================
+alertcondition(buy_signal, title="1-Min Scalp BUY Signal", message="⚡ 1-Min Scalp BUY Signal Triggered! Check LH Break & EMA Support.")
+alertcondition(sell_signal, title="1-Min Scalp SELL Signal", message="⚡ 1-Min Scalp SELL Signal Triggered! Check HL Break & EMA Resistance.")
+
+if buy_signal
+    alert("⚡ 1-Min Scalp BUY Signal on " + timeframe.period + " chart. Entry: " + str.tostring(close), alertMode)
+
+if sell_signal
+    alert("⚡ 1-Min Scalp SELL Signal on " + timeframe.period + " chart. Entry: " + str.tostring(close), alertMode)
