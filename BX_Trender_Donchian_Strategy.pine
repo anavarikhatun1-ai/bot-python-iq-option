@@ -1,5 +1,5 @@
 //@version=5
-strategy("BX Trender & Donchian Trend Strategy", shorttitle="BXT_Donchian_Strat", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.075)
+strategy("B-Xtrender & Donchian Trend Strategy", shorttitle="B_Xtrender_Donchian_Strat", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.075)
 
 // ==========================================
 // 1. INPUTS SECTION
@@ -7,10 +7,10 @@ strategy("BX Trender & Donchian Trend Strategy", shorttitle="BXT_Donchian_Strat"
 
 // Donchian Trend Inputs
 donchianGroup = "1. Donchian Trend Settings"
-donchianLength = input.int(200, title="Donchian Channel Length", minval=1, group=donchianGroup, tooltip="Length for Donchian Channel calculation (Gatekeeper Trend Filter)")
+donchianLength = input.int(200, title="Donchian Channel Length", minval=1, group=donchianGroup, tooltip="Length for Donchian Channel calculation (Gatekeeper Trend Filter by LonesomeTheBlue)")
 
-// BX Trender Inputs
-bxGroup = "2. BX Trender Settings"
+// B-Xtrender Inputs
+bxGroup = "2. B-Xtrender Settings (Quant Therapy)"
 shortRsiLen   = input.int(5, title="Short RSI Length", minval=1, group=bxGroup)
 longRsiLen    = input.int(20, title="Long RSI Length", minval=1, group=bxGroup)
 shortEmaLen   = input.int(5, title="Short EMA Smoothing Length", minval=1, group=bxGroup)
@@ -47,7 +47,7 @@ bool donchianIsRed   = close < donchianBasis
 
 plot(donchianBasis, title="Donchian Mid-Line (200)", color=donchianIsGreen ? color.green : color.red, linewidth=2)
 
-// --- BX Trender Calculations ---
+// --- B-Xtrender Calculations ---
 // Short and Long RSI components
 shortRsi = ta.rsi(close, shortRsiLen)
 longRsi  = ta.rsi(close, longRsiLen)
@@ -56,17 +56,17 @@ longRsi  = ta.rsi(close, longRsiLen)
 shortEmaRsi = ta.ema(shortRsi, shortEmaLen)
 longEmaRsi  = ta.ema(longRsi, longEmaLen)
 
-// BX Trender Oscillator & Signal Line
+// B-Xtrender Oscillator & Signal Line
 bxOscillator = shortEmaRsi - longEmaRsi
 bxSignal     = ta.ema(bxOscillator, signalEmaLen)
 
-// BX Trender Oscillator Histogram
+// B-Xtrender Oscillator Histogram
 bxOscHistogram = bxOscillator - bxSignal
 
-// BX Trender Trend Histogram
+// B-Xtrender Trend Histogram
 bxTrendHistogram = ta.ema(shortRsi - 50, longEmaLen)
 
-// BX Trender Histogram States
+// B-Xtrender Histogram States
 // Bright Green Trend: Positive and rising or strong bullish
 bool bxTrendBrightGreen = bxTrendHistogram > 0 and bxTrendHistogram >= bxTrendHistogram[1]
 // Dark Red Trend: Negative and falling or strong bearish
@@ -92,16 +92,16 @@ bool barConfirmed = barstate.isconfirmed
 
 // Long Trade Entry Conditions (All must be true):
 // 1. Long-term Trend: Donchian Line is Green AND Price is trading above it.
-// 2. Short-term Trend: BX Trender Trend Histogram must be Bright Green.
-// 3. Momentum: BX Trender Oscillator Histogram must be Green (> 0).
-// 4. Signal Trigger: Green Dot printed on BX Trender Oscillator below the zero line.
+// 2. Short-term Trend: B-Xtrender Trend Histogram must be Bright Green.
+// 3. Momentum: B-Xtrender Oscillator Histogram must be Green (> 0).
+// 4. Signal Trigger: Green Dot printed on B-Xtrender Oscillator below the zero line.
 bool longCondition = donchianIsGreen and bxTrendBrightGreen and bxOscHistGreen and greenDotSignal and barConfirmed
 
 // Short Trade Entry Conditions (All must be true):
 // 1. Long-term Trend: Donchian Line is Red AND Price is trading below it.
-// 2. Short-term Trend: BX Trender Trend Histogram must be Dark Red.
-// 3. Momentum: BX Trender Oscillator Histogram must be Red (< 0).
-// 4. Signal Trigger: Red Dot printed on BX Trender Oscillator above the zero line.
+// 2. Short-term Trend: B-Xtrender Trend Histogram must be Dark Red.
+// 3. Momentum: B-Xtrender Oscillator Histogram must be Red (< 0).
+// 4. Signal Trigger: Red Dot printed on B-Xtrender Oscillator above the zero line.
 bool shortCondition = donchianIsRed and bxTrendDarkRed and bxOscHistRed and redDotSignal and barConfirmed
 
 // ==========================================
@@ -130,7 +130,7 @@ if longCondition and strategy.position_size == 0
     strategy.exit("Exit Long", "Long", stop=stopLossPrice, limit=takeProfitPrice)
 
     // Automated Alert
-    alert("BX Trender & Donchian Long Signal Triggered! Price: " + str.tostring(close), alert.freq_once_per_bar_close)
+    alert("B-Xtrender & Donchian Long Signal Triggered! Price: " + str.tostring(close), alert.freq_once_per_bar_close)
 
 if shortCondition and strategy.position_size == 0
     entryPrice      := close
@@ -145,7 +145,7 @@ if shortCondition and strategy.position_size == 0
     strategy.exit("Exit Short", "Short", stop=stopLossPrice, limit=takeProfitPrice)
 
     // Automated Alert
-    alert("BX Trender & Donchian Short Signal Triggered! Price: " + str.tostring(close), alert.freq_once_per_bar_close)
+    alert("B-Xtrender & Donchian Short Signal Triggered! Price: " + str.tostring(close), alert.freq_once_per_bar_close)
 
 // Reset tracking when flat
 if strategy.position_size[1] != 0 and strategy.position_size == 0
@@ -174,5 +174,5 @@ plot(showSlTp and inPosition ? takeProfitPrice : na, title="Take Profit Level", 
 // ==========================================
 
 // Additional alert conditions for interface configuration
-alertcondition(longCondition, title="Buy Entry Alert", message="BX Trender & Donchian Long Entry Signal")
-alertcondition(shortCondition, title="Sell Entry Alert", message="BX Trender & Donchian Short Entry Signal")
+alertcondition(longCondition, title="Buy Entry Alert", message="B-Xtrender & Donchian Long Entry Signal")
+alertcondition(shortCondition, title="Sell Entry Alert", message="B-Xtrender & Donchian Short Entry Signal")
