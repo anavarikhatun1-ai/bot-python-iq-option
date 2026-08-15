@@ -64,8 +64,42 @@ red_dot   = ta.crossunder(bxt_oscillator, bxt_oscillator[1])
 // Trend Histogram Colors
 // Bright Green: Trend line is positive and rising
 bxt_trend_bright_green = bxt_trend_line > 0 and bxt_trend_line > bxt_trend_line[1]
+// Dark Green: Trend line is positive but falling/flat
+bxt_trend_dark_green   = bxt_trend_line > 0 and bxt_trend_line <= bxt_trend_line[1]
 // Dark Red: Trend line is negative and falling
 bxt_trend_dark_red     = bxt_trend_line < 0 and bxt_trend_line < bxt_trend_line[1]
+// Light Red: Trend line is negative but rising/flat
+bxt_trend_light_red    = bxt_trend_line < 0 and bxt_trend_line >= bxt_trend_line[1]
+
+bxt_trend_hist_color = bxt_trend_bright_green ? #00E676 :
+                       bxt_trend_dark_green   ? #004D40 :
+                       bxt_trend_dark_red     ? #880E4F :
+                       bxt_trend_light_red    ? #FF5252 : color.gray
+
+bxt_osc_hist_color   = bxt_osc_hist_green ? color.new(color.green, 30) : color.new(color.red, 30)
+
+// ==========================================
+// 2B. VISUAL PLOTS FOR B-XTRENDER
+// ==========================================
+
+// Render B-Xtrender components in a separate indicator pane below chart using force_overlay=false
+plot(0, title="Zero Line", color=color.gray, style=plot.style_line, force_overlay=false)
+
+// 1. Trend Histogram
+plot(bxt_trend_line, title="B-Xtrender Trend Histogram", color=bxt_trend_hist_color, style=plot.style_histogram, linewidth=2, force_overlay=false)
+
+// 2. Trend Line
+plot(bxt_trend_line, title="B-Xtrender Trend Line", color=color.white, linewidth=1, force_overlay=false)
+
+// 3. Oscillator Line
+plot(bxt_oscillator, title="B-Xtrender Oscillator", color=color.yellow, linewidth=2, force_overlay=false)
+
+// 4. Oscillator Histogram
+plot(bxt_oscillator, title="B-Xtrender Oscillator Histogram", color=bxt_osc_hist_color, style=plot.style_columns, force_overlay=false)
+
+// 5. Oscillator Dots
+plotshape(green_dot ? bxt_oscillator : na, title="B-Xtrender Green Dot", style=shape.circle, location=location.absolute, color=color.green, size=size.tiny, force_overlay=false)
+plotshape(red_dot ? bxt_oscillator : na, title="B-Xtrender Red Dot", style=shape.circle, location=location.absolute, color=color.red, size=size.tiny, force_overlay=false)
 
 // ==========================================
 // 3. TRADE ENTRY LOGIC & CONDITIONS
@@ -127,7 +161,7 @@ if (short_condition)
         strategy.exit("Exit Short", "Short", stop=short_sl, limit=short_tp)
 
         // Visual Sell Label
-        label.new(bar_index,high, text="SELL", style=label.style_label_down, color=color.red, textcolor=color.white, yloc=yloc.abovebar)
+        label.new(bar_index, high, text="SELL", style=label.style_label_down, color=color.red, textcolor=color.white, yloc=yloc.abovebar)
 
         // Automated Alert
         alert("Sell Signal Generated! Price: " + str.tostring(close) + " SL: " + str.tostring(short_sl) + " TP: " + str.tostring(short_tp), alert.freq_once_per_bar_close)
