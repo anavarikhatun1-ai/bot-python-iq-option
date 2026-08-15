@@ -1,0 +1,169 @@
+//@version=6
+strategy("B-Xtrender Donchian Strategy", overlay=false, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, currency="USD")
+
+// ==========================================
+// 1. INPUTS & CONFIGURATION
+// ==========================================
+
+// Donchian Trend Settings
+grp_donchian = "Donchian Trend Filter (LonesomeTheBlue)"
+donchian_len = input.int(200, title="Donchian Length", minval=1, group=grp_donchian)
+
+// B-Xtrender Settings (QuantTherapy Defaults)
+grp_bxt = "B-Xtrender Settings (QuantTherapy)"
+short_l1 = input.int(5, title="Short-Term RSI Length", minval=1, group=grp_bxt)
+short_l2 = input.int(20, title="Short-Term EMA Length 1", minval=1, group=grp_bxt)
+short_l3 = input.int(15, title="Short-Term EMA Length 2", minval=1, group=grp_bxt)
+
+long_l1  = input.int(20, title="Long-Term RSI Length", minval=1, group=grp_bxt)
+long_l2  = input.int(15, title="Long-Term EMA Length 1", minval=1, group=grp_bxt)
+long_l3  = input.int(10, title="Long-Term EMA Length 2", minval=1, group=grp_bxt)
+
+// Risk Management Settings
+grp_risk = "Risk Management & Execution"
+swing_lookback = input.int(10, title="Swing High/Low Lookback", minval=1, group=grp_risk)
+rr_ratio       = input.float(2.5, title="Risk-to-Reward Ratio", minval=0.1, step=0.1, group=grp_risk)
+
+// ==========================================
+// 2. INDICATOR CALCULATIONS
+// ==========================================
+
+// --- Donchian Trend Calculation ---
+donchian_upper  = ta.highest(high, donchian_len)
+donchian_lower  = ta.lowest(low, donchian_len)
+donchian_line   = math.avg(donchian_upper, donchian_lower)
+
+donchian_is_green = close > donchian_line
+donchian_is_red   = close < donchian_line
+
+donchian_color    = donchian_is_green ? color.green : color.red
+
+// Plot Donchian Trend Line directly on main price chart overlay using force_overlay=true
+plot(donchian_line, title="Donchian Trend Line", color=donchian_color, linewidth=2, force_overlay=true)
+
+// --- B-Xtrender Calculation ---
+// Short-Term Oscillator
+short_rsi = ta.rsi(close, short_l1)
+short_ema1 = ta.ema(short_rsi, short_l2)
+short_ema2 = ta.ema(short_ema1, short_l3)
+bxt_oscillator = short_ema2 - 50
+
+// Long-Term Trend Line
+long_rsi = ta.rsi(close, long_l1)
+long_ema1 = ta.ema(long_rsi, long_l2)
+long_ema2 = ta.ema(long_ema1, long_l3)
+bxt_trend_line = long_ema2 - 50
+
+// Oscillator Histogram & Dot Signals
+bxt_osc_hist_green = bxt_oscillator > bxt_oscillator[1]
+bxt_osc_hist_red   = bxt_oscillator < bxt_oscillator[1]
+
+// Green Dot Trigger: Oscillator turning up from previous candle
+green_dot = ta.crossover(bxt_oscillator, bxt_oscillator[1])
+// Red Dot Trigger: Oscillator turning down from previous candle
+red_dot   = ta.crossunder(bxt_oscillator, bxt_oscillator[1])
+
+// Trend Histogram Colors
+// Bright Green: Trend line is positive and rising
+bxt_trend_bright_green = bxt_trend_line > 0 and bxt_trend_line > bxt_trend_line[1]
+// Dark Green: Trend line is positive but falling/flat
+bxt_trend_dark_green   = bxt_trend_line > 0 and bxt_trend_line <= bxt_trend_line[1]
+// Dark Red: Trend line is negative and falling
+bxt_trend_dark_red     = bxt_trend_line < 0 and bxt_trend_line < bxt_trend_line[1]
+// Light Red: Trend line is negative but rising/flat
+bxt_trend_light_red    = bxt_trend_line < 0 and bxt_trend_line >= bxt_trend_line[1]
+
+bxt_trend_hist_color = bxt_trend_bright_green ? #00E676 :
+                       bxt_trend_dark_green   ? #004D40 :
+                       bxt_trend_dark_red     ? #880E4F :
+                       bxt_trend_light_red    ? #FF5252 : color.gray
+
+bxt_osc_hist_color   = bxt_osc_hist_green ? color.new(color.green, 30) : color.new(color.red, 30)
+
+// ==========================================
+// 2B. VISUAL PLOTS FOR B-XTRENDER (BOTTOM PANE)
+// ==========================================
+
+// Render B-Xtrender components in the dedicated bottom indicator pane (overlay=false)
+plot(0, title="Zero Line", color=color.gray, style=plot.style_line)
+
+// 1. Trend Histogram
+plot(bxt_trend_line, title="B-Xtrender Trend Histogram", color=bxt_trend_hist_color, style=plot.style_histogram, linewidth=2)
+
+// 2. Trend Line
+plot(bxt_trend_line, title="B-Xtrender Trend Line", color=color.white, linewidth=1)
+
+// 3. Oscillator Line
+plot(bxt_oscillator, title="B-Xtrender Oscillator", color=color.yellow, linewidth=2)
+
+// 4. Oscillator Histogram
+plot(bxt_oscillator, title="B-Xtrender Oscillator Histogram", color=bxt_osc_hist_color, style=plot.style_columns)
+
+// 5. Oscillator Dots
+plotshape(green_dot ? bxt_oscillator : na, title="B-Xtrender Green Dot", style=shape.circle, location=location.absolute, color=color.green, size=size.tiny)
+plotshape(red_dot ? bxt_oscillator : na, title="B-Xtrender Red Dot", style=shape.circle, location=location.absolute, color=color.red, size=size.tiny)
+
+// ==========================================
+// 3. TRADE ENTRY LOGIC & CONDITIONS
+// ==========================================
+
+// Entry Conditions evaluated on confirmed closed bars to prevent repainting
+confirmed = barstate.isconfirmed
+
+// Long Strategy (Buy) Logic
+long_condition = confirmed and
+                 donchian_is_green and
+                 bxt_trend_bright_green and
+                 bxt_osc_hist_green and
+                 green_dot and
+                 (bxt_oscillator < 0) // Green dot MUST be below zero
+
+// Short Strategy (Sell) Logic
+short_condition = confirmed and
+                  donchian_is_red and
+                  bxt_trend_dark_red and
+                  bxt_osc_hist_red and
+                  red_dot and
+                  (bxt_oscillator > 0) // Red dot MUST be above zero
+
+// ==========================================
+// 4. RISK MANAGEMENT & EXECUTION
+// ==========================================
+
+// Track Stop Loss and Take Profit levels
+var float long_sl = na
+var float long_tp = na
+var float short_sl = na
+var float short_tp = na
+
+// Long Trade Execution
+if (long_condition)
+    swing_low = ta.lowest(low, swing_lookback)
+    long_sl := swing_low
+    risk_amount = close - long_sl
+    if (risk_amount > 0)
+        long_tp := close + (risk_amount * rr_ratio)
+        strategy.entry("Long", strategy.long)
+        strategy.exit("Exit Long", "Long", stop=long_sl, limit=long_tp)
+
+        // Visual Buy Label force_overlay on main price chart
+        label.new(bar_index, low, text="BUY", style=label.style_label_up, color=color.green, textcolor=color.white, yloc=yloc.belowbar, force_overlay=true)
+
+        // Automated Alert
+        alert("Buy Signal Generated! Price: " + str.tostring(close) + " SL: " + str.tostring(long_sl) + " TP: " + str.tostring(long_tp), alert.freq_once_per_bar_close)
+
+// Short Trade Execution
+if (short_condition)
+    swing_high = ta.highest(high, swing_lookback)
+    short_sl := swing_high
+    risk_amount = short_sl - close
+    if (risk_amount > 0)
+        short_tp := close - (risk_amount * rr_ratio)
+        strategy.entry("Short", strategy.short)
+        strategy.exit("Exit Short", "Short", stop=short_sl, limit=short_tp)
+
+        // Visual Sell Label force_overlay on main price chart
+        label.new(bar_index, high, text="SELL", style=label.style_label_down, color=color.red, textcolor=color.white, yloc=yloc.abovebar, force_overlay=true)
+
+        // Automated Alert
+        alert("Sell Signal Generated! Price: " + str.tostring(close) + " SL: " + str.tostring(short_sl) + " TP: " + str.tostring(short_tp), alert.freq_once_per_bar_close)
