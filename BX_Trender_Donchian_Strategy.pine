@@ -1,0 +1,178 @@
+//@version=5
+strategy("B-Xtrender & Donchian Trend Strategy", shorttitle="B_Xtrender_Donchian_Strat", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10, commission_type=strategy.commission.percent, commission_value=0.075)
+
+// ==========================================
+// 1. INPUTS SECTION
+// ==========================================
+
+// Donchian Trend Inputs
+donchianGroup = "1. Donchian Trend Settings"
+donchianLength = input.int(200, title="Donchian Channel Length", minval=1, group=donchianGroup, tooltip="Length for Donchian Channel calculation (Gatekeeper Trend Filter by LonesomeTheBlue)")
+
+// B-Xtrender Inputs
+bxGroup = "2. B-Xtrender Settings (Quant Therapy)"
+shortRsiLen   = input.int(5, title="Short RSI Length", minval=1, group=bxGroup)
+longRsiLen    = input.int(20, title="Long RSI Length", minval=1, group=bxGroup)
+shortEmaLen   = input.int(5, title="Short EMA Smoothing Length", minval=1, group=bxGroup)
+longEmaLen    = input.int(20, title="Long EMA Smoothing Length", minval=1, group=bxGroup)
+signalEmaLen  = input.int(3, title="Signal Line Length", minval=1, group=bxGroup)
+
+// Risk Management Inputs
+rmGroup = "3. Risk Management"
+useSwingSl    = input.bool(true, title="Use Swing High/Low for Stop Loss", group=rmGroup, tooltip="If checked, uses recent Swing High/Low; otherwise uses ATR-based Stop Loss")
+swingLookback = input.int(10, title="Swing High/Low Lookback Bars", minval=1, group=rmGroup)
+atrLen        = input.int(14, title="ATR Length (for fallback/buffer)", minval=1, group=rmGroup)
+atrMult       = input.float(1.5, title="ATR Multiplier (fallback SL)", minval=0.1, step=0.1, group=rmGroup)
+rrRatio       = input.float(2.5, title="Risk-to-Reward Ratio (1:X)", minval=0.1, step=0.1, group=rmGroup)
+
+// Visual & UI Settings
+uiGroup = "4. Visuals & Alerts"
+showLabels    = input.bool(true, title="Show Buy/Sell Signal Labels", group=uiGroup)
+showSlTp      = input.bool(true, title="Show SL/TP Dynamic Lines", group=uiGroup)
+
+// ==========================================
+// 2. INDICATOR CALCULATIONS
+// ==========================================
+
+// --- Donchian Trend Filter Calculation ---
+donchianUpper = ta.highest(high, donchianLength)
+donchianLower = ta.lowest(low, donchianLength)
+donchianBasis = math.avg(donchianUpper, donchianLower)
+
+// Long-term Donchian Trend State
+// Bullish: Price (close) is trading above the Donchian mid-line
+// Bearish: Price (close) is trading below the Donchian mid-line
+bool donchianIsGreen = close > donchianBasis
+bool donchianIsRed   = close < donchianBasis
+
+plot(donchianBasis, title="Donchian Mid-Line (200)", color=donchianIsGreen ? color.green : color.red, linewidth=2)
+
+// --- B-Xtrender Calculations ---
+// Short and Long RSI components
+shortRsi = ta.rsi(close, shortRsiLen)
+longRsi  = ta.rsi(close, longRsiLen)
+
+// Smoothed RSI components
+shortEmaRsi = ta.ema(shortRsi, shortEmaLen)
+longEmaRsi  = ta.ema(longRsi, longEmaLen)
+
+// B-Xtrender Oscillator & Signal Line
+bxOscillator = shortEmaRsi - longEmaRsi
+bxSignal     = ta.ema(bxOscillator, signalEmaLen)
+
+// B-Xtrender Oscillator Histogram
+bxOscHistogram = bxOscillator - bxSignal
+
+// B-Xtrender Trend Histogram
+bxTrendHistogram = ta.ema(shortRsi - 50, longEmaLen)
+
+// B-Xtrender Histogram States
+// Bright Green Trend: Positive and rising or strong bullish
+bool bxTrendBrightGreen = bxTrendHistogram > 0 and bxTrendHistogram >= bxTrendHistogram[1]
+// Dark Red Trend: Negative and falling or strong bearish
+bool bxTrendDarkRed     = bxTrendHistogram < 0 and bxTrendHistogram <= bxTrendHistogram[1]
+
+// Oscillator Histogram Momentum States
+bool bxOscHistGreen = bxOscHistogram > 0
+bool bxOscHistRed   = bxOscHistogram < 0
+
+// Signal Trigger Dots (Crossover / Crossunder relative to zero line)
+// Green Dot: Crossover below zero line (Mean-reversion trigger at start of momentum shift)
+bool greenDotSignal = ta.crossover(bxOscillator, bxSignal) and bxOscillator < 0
+
+// Red Dot: Crossunder above zero line
+bool redDotSignal   = ta.crossunder(bxOscillator, bxSignal) and bxOscillator > 0
+
+// ==========================================
+// 3. ENTRY & EXIT SIGNAL CONDITIONS
+// ==========================================
+
+// Confirmed Bar execution to prevent repainting
+bool barConfirmed = barstate.isconfirmed
+
+// Long Trade Entry Conditions (All must be true):
+// 1. Long-term Trend: Donchian Line is Green AND Price is trading above it.
+// 2. Short-term Trend: B-Xtrender Trend Histogram must be Bright Green.
+// 3. Momentum: B-Xtrender Oscillator Histogram must be Green (> 0).
+// 4. Signal Trigger: Green Dot printed on B-Xtrender Oscillator below the zero line.
+bool longCondition = donchianIsGreen and bxTrendBrightGreen and bxOscHistGreen and greenDotSignal and barConfirmed
+
+// Short Trade Entry Conditions (All must be true):
+// 1. Long-term Trend: Donchian Line is Red AND Price is trading below it.
+// 2. Short-term Trend: B-Xtrender Trend Histogram must be Dark Red.
+// 3. Momentum: B-Xtrender Oscillator Histogram must be Red (< 0).
+// 4. Signal Trigger: Red Dot printed on B-Xtrender Oscillator above the zero line.
+bool shortCondition = donchianIsRed and bxTrendDarkRed and bxOscHistRed and redDotSignal and barConfirmed
+
+// ==========================================
+// 4. RISK MANAGEMENT & POSITION SIZING
+// ==========================================
+
+var float entryPrice = na
+var float stopLossPrice = na
+var float takeProfitPrice = na
+
+// Calculate Swing High and Low
+swingLow  = ta.lowest(low, swingLookback)
+swingHigh = ta.highest(high, swingLookback)
+atrVal    = ta.atr(atrLen)
+
+if longCondition and strategy.position_size == 0
+    entryPrice      := close
+    stopLossPrice   := useSwingSl ? swingLow[1] : (close - atrVal * atrMult)
+    // Ensure SL is strictly below entry
+    if stopLossPrice >= entryPrice
+        stopLossPrice := entryPrice - (atrVal * atrMult)
+    riskDistance    = entryPrice - stopLossPrice
+    takeProfitPrice := entryPrice + (riskDistance * rrRatio)
+
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Exit Long", "Long", stop=stopLossPrice, limit=takeProfitPrice)
+
+    // Automated Alert
+    alert("B-Xtrender & Donchian Long Signal Triggered! Price: " + str.tostring(close), alert.freq_once_per_bar_close)
+
+if shortCondition and strategy.position_size == 0
+    entryPrice      := close
+    stopLossPrice   := useSwingSl ? swingHigh[1] : (close + atrVal * atrMult)
+    // Ensure SL is strictly above entry
+    if stopLossPrice <= entryPrice
+        stopLossPrice := entryPrice + (atrVal * atrMult)
+    riskDistance    = stopLossPrice - entryPrice
+    takeProfitPrice := entryPrice - (riskDistance * rrRatio)
+
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Exit Short", "Short", stop=stopLossPrice, limit=takeProfitPrice)
+
+    // Automated Alert
+    alert("B-Xtrender & Donchian Short Signal Triggered! Price: " + str.tostring(close), alert.freq_once_per_bar_close)
+
+// Reset tracking when flat
+if strategy.position_size[1] != 0 and strategy.position_size == 0
+    entryPrice      := na
+    stopLossPrice   := na
+    takeProfitPrice := na
+
+// ==========================================
+// 5. VISUALS (UI/UX) & LABELS
+// ==========================================
+
+// Signal Labels at high/low of signal candle
+if showLabels and longCondition
+    label.new(bar_index, low, text="Buy", style=label.style_label_up, color=color.green, textcolor=color.white, size=size.normal)
+
+if showLabels and shortCondition
+    label.new(bar_index, high, text="Sell", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.normal)
+
+// Plot dynamic SL and TP levels when in position
+inPosition = strategy.position_size != 0
+plot(showSlTp and inPosition ? stopLossPrice : na, title="Stop Loss Level", color=color.red, style=plot.style_linebr, linewidth=2)
+plot(showSlTp and inPosition ? takeProfitPrice : na, title="Take Profit Level", color=color.green, style=plot.style_linebr, linewidth=2)
+
+// ==========================================
+// 6. ALERT CONDITIONS FOR EXTERNAL BOTS
+// ==========================================
+
+// Additional alert conditions for interface configuration
+alertcondition(longCondition, title="Buy Entry Alert", message="B-Xtrender & Donchian Long Entry Signal")
+alertcondition(shortCondition, title="Sell Entry Alert", message="B-Xtrender & Donchian Short Entry Signal")
