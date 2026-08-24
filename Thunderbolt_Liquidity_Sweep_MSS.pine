@@ -1,0 +1,773 @@
+//@version=6
+strategy(
+     title="ThunderBolt 3.0 Liquidity Sweep MSS (Prop Firm)",
+     short_title="TB_Sweep_MSS_PropFirm",
+     overlay=true,
+     initial_capital=10000,
+     default_qty_type=strategy.percent_of_equity,
+     default_qty_value=0.5,
+     commission_type=strategy.commission.percent,
+     commission_value=0.0,
+     slippage=0,
+     pyramiding=10
+ )
+
+// ============================================================================
+// 1. INPUT GROUPS
+// ============================================================================
+
+// 1.1 Pivot & Structure Inputs
+pivotLen        = input.int(5, "Pivot Length", minval=1, maxval=20, group="1. Pivot & Structure", tooltip="Bars on each side to confirm a swing pivot.")
+structureMode   = input.string("Auto", "Structure Direction Mode", options=["Auto", "Bullish", "Bearish"], group="1. Pivot & Structure", tooltip="Force market structure direction for MSS.")
+mssRequired     = input.bool(true, "Require MSS Confirmation", group="1. Pivot & Structure", tooltip="Require MSS confirmation before entry.")
+bosRequired     = input.bool(false, "Require BOS Confirmation", group="1. Pivot & Structure", tooltip="Require a second structure break (BOS) after MSS.")
+mssLookback     = input.int(15, "MSS Lookback Bars", minval=1, maxval=100, group="1. Pivot & Structure", tooltip="Max bars to search backward for the relevant pivot.")
+breakMode       = input.string("Close", "Break Validation Mode", options=["Close", "Wick", "Buffer_ticks", "Buffer_%"], group="1. Pivot & Structure", tooltip="How structure breaks are validated.")
+breakBuffer     = input.float(0.0, "Break Buffer Value", minval=0.0, maxval=100.0, group="1. Pivot & Structure", tooltip="Buffer in ticks or percent for break validation.")
+
+// 1.2 Sweep Detection Inputs
+sweepEnabled         = input.bool(true, "Enable Sweep Detection", group="2. Sweep Detection")
+minSweepDist         = input.float(0.0, "Minimum Sweep Distance (Ticks)", minval=0.0, maxval=100.0, group="2. Sweep Detection", tooltip="Minimum distance beyond pivot to qualify as sweep.")
+maxSweepDist         = input.float(100.0, "Maximum Sweep Distance (Ticks)", minval=0.0, maxval=1000.0, group="2. Sweep Detection", tooltip="Maximum distance allowed to avoid huge gaps.")
+atrPeriod            = input.int(14, "ATR Period for Volatility", minval=1, maxval=100, group="2. Sweep Detection")
+sweepWickPct         = input.float(0.0, "Sweep Wick % of Range", minval=0.0, maxval=100.0, group="2. Sweep Detection", tooltip="Require sweep wick >= X% of bar range.")
+sweepVolMult         = input.float(0.0, "Sweep Volume Multiplier", minval=0.0, maxval=10.0, group="2. Sweep Detection", tooltip="Require sweep volume >= X * average volume.")
+allowSameBarReclaim  = input.bool(false, "Allow Same Bar Reclaim", group="2. Sweep Detection", tooltip="Allow the sweep candle itself to count as reclaim.")
+
+// 1.3 Reclaim Requirements
+reclaimRequired = input.bool(true, "Require Reclaim to Continue", group="3. Reclaim Requirements")
+reclaimWindow   = input.int(3, "Reclaim Window (Bars)", minval=1, maxval=20, group="3. Reclaim Requirements", tooltip="Max bars after sweep to get reclaim.")
+reclaimBuffer   = input.float(0.0, "Reclaim Buffer (Ticks)", minval=0.0, maxval=100.0, group="3. Reclaim Requirements", tooltip="Buffer in ticks.")
+reclaimClose    = input.bool(true, "Require Close for Reclaim", group="3. Reclaim Requirements", tooltip="Require CLOSE beyond pivot (vs wick).")
+reclaimMinPct   = input.float(0.0, "Reclaim Min % beyond Pivot", minval=0.0, maxval=100.0, group="3. Reclaim Requirements", tooltip="Minimum % above/below pivot on close.")
+
+// 1.4 MSS / CHOCH Settings
+mssWindow       = input.int(5, "MSS Window (Bars)", minval=1, maxval=20, group="4. MSS / CHOCH Settings", tooltip="Max bars after reclaim to break structure.")
+mssBuffer       = input.float(0.0, "MSS Buffer Value (Ticks)", minval=0.0, maxval=100.0, group="4. MSS / CHOCH Settings", tooltip="ATR or tick buffer beyond pivot.")
+mssBreakByClose = input.bool(true, "Require Close for MSS", group="4. MSS / CHOCH Settings", tooltip="Require candle CLOSE beyond pivot for MSS.")
+minMSSCandle    = input.float(0.0, "Min MSS Candle Size (% of ATR)", minval=0.0, maxval=100.0, group="4. MSS / CHOCH Settings", tooltip="MSS candle range >= X% of ATR.")
+
+// 1.5 ThunderBolt Filter Inputs (all default OFF)
+useTrendCandleFilter = input.bool(false, "Use Trend Candles Filter", group="5. ThunderBolt Filters")
+useTrendlineFilter   = input.bool(false, "Use Primary Trendlines Filter", group="5. ThunderBolt Filters")
+useSRFilter          = input.bool(false, "Use Support/Resistance Filter", group="5. ThunderBolt Filters")
+useCPRFilter         = input.bool(false, "Use CPR (Pivot Range) Filter", group="5. ThunderBolt Filters")
+useFibFilter         = input.bool(false, "Use Fibonacci Filter", group="5. ThunderBolt Filters")
+useRSIFilter         = input.bool(false, "Use RSI Pivot Lines Filter", group="5. ThunderBolt Filters")
+useMAFilter          = input.bool(false, "Use Moving Average Filter", group="5. ThunderBolt Filters")
+useVolumeFilter      = input.bool(false, "Use Volume Filter", group="5. ThunderBolt Filters")
+
+// 1.6 Session Filters (Prop Firm)
+sessionFilter       = input.bool(false, "Enable Trade Session Filter", group="6. Session Filters")
+tradeSession        = input.string("0930-1600", "Trade Session Time", group="6. Session Filters", tooltip="e.g., '0930-1600', 'Europe', 'Asia'")
+timezone            = input.string("exchange", "Session Timezone", group="6. Session Filters", tooltip="'exchange', 'Etc/UTC'")
+flattenAtSessionEnd = input.bool(true, "Flatten Positions at Session End", group="6. Session Filters")
+
+// 1.7 Entry Settings
+enterLong        = input.bool(true, "Allow Long Entries", group="7. Entry Settings")
+enterShort       = input.bool(true, "Allow Short Entries", group="7. Entry Settings")
+entryType        = input.string("Market", "Entry Order Type", options=["Market", "Limit"], group="7. Entry Settings")
+entryBuffer      = input.float(0.0, "Entry Price Buffer (Ticks)", group="7. Entry Settings")
+oneEntryPerSetup = input.bool(true, "Allow Only One Entry Per Setup", group="7. Entry Settings")
+cooldownBars     = input.int(0, "Cooldown Bars between Entries", minval=0, group="7. Entry Settings")
+
+// 1.8 Risk Management — Prop Firm Critical ⚠️
+useFixedQty    = input.bool(false, "Use Fixed Order Qty", group="8. Risk Management")
+qty            = input.float(1.0, "Fixed Quantity Value", group="8. Risk Management")
+riskPercent    = input.float(0.5, "Risk % Per Trade", minval=0.1, maxval=2.0, group="8. Risk Management")
+maxPositions   = input.int(1, "Max Simultaneous Trades", minval=1, maxval=5, group="8. Risk Management")
+pyramiding_val = input.int(0, "Pyramiding Entries", minval=0, maxval=5, group="8. Risk Management")
+maxDailyLoss   = input.float(2.0, "Max Daily Loss Limit (%)", minval=0.5, maxval=5.0, group="8. Risk Management")
+maxDailyTrades = input.int(5, "Max Trades Per Day", minval=1, maxval=20, group="8. Risk Management")
+
+// 1.9 Stop-Loss Settings
+stopMethod   = input.string("PivotExtreme", "Stop-Loss Method", options=["PivotExtreme", "ATR", "Fixed%", "FixedTicks"], group="9. Stop-Loss Settings")
+slBuffer     = input.float(0.0, "Stop Buffer (Ticks or ATR Mult)", group="9. Stop-Loss Settings")
+atrSLMult    = input.float(2.0, "ATR Stop-Loss Multiplier", group="9. Stop-Loss Settings")
+slPercent    = input.float(1.0, "Fixed % Stop-Loss", group="9. Stop-Loss Settings")
+slTicks      = input.float(10.0, "Fixed Ticks Stop-Loss", group="9. Stop-Loss Settings")
+
+// 1.10 Take-Profit Settings
+tpMethod          = input.string("RiskReward", "Take-Profit Method", options=["RiskReward", "ATR", "Fixed%", "PivotTarget"], group="10. Take-Profit Settings")
+rrMultiplier      = input.float(2.0, "Risk-Reward Ratio (Multiplier)", group="10. Take-Profit Settings")
+atrTPMult         = input.float(3.0, "ATR Take-Profit Multiplier", group="10. Take-Profit Settings")
+tpPercent         = input.float(2.0, "Fixed % Take-Profit", group="10. Take-Profit Settings")
+enablePartialTP   = input.bool(false, "Enable Partial Take-Profits", group="10. Take-Profit Settings")
+tp1Mult           = input.float(1.0, "Partial TP1 (R Multiple)", group="10. Take-Profit Settings")
+tp2Mult           = input.float(2.0, "Partial TP2 (R Multiple)", group="10. Take-Profit Settings")
+tp3Mult           = input.float(3.0, "Partial TP3 (R Multiple)", group="10. Take-Profit Settings")
+moveSLtoBreakeven = input.bool(false, "Move SL to Breakeven at TP1", group="10. Take-Profit Settings")
+
+// 1.11 Visualization & Alerts
+showPivots      = input.bool(true, "Show Confirmed Pivots", group="11. Visualization")
+showSweeps      = input.bool(true, "Show Sweep Markers", group="11. Visualization")
+showReclaims    = input.bool(true, "Show Reclaim Markers", group="11. Visualization")
+showMSS         = input.bool(true, "Show MSS Markers", group="11. Visualization")
+showBOS         = input.bool(true, "Show BOS Markers", group="11. Visualization")
+showEntryArrows = input.bool(true, "Show Entry Arrows", group="11. Visualization")
+showSL          = input.bool(true, "Show Stop-Loss Lines", group="11. Visualization")
+showTP          = input.bool(true, "Show Take-Profit Lines", group="11. Visualization")
+
+// 1.12 Backtest Settings
+initialCapital    = input.float(10000.0, "Initial Capital", group="12. Backtest Settings")
+commissionPercent = input.float(0.0, "Commission per Trade (%)", group="12. Backtest Settings")
+slippage          = input.float(0.0, "Slippage in Ticks", group="12. Backtest Settings")
+pyramidingMax     = input.int(0, "Max Pyramiding Entries Allowed", group="12. Backtest Settings")
+
+
+// ============================================================================
+// 2. GLOBAL THUNDERBOLT 3.0 CALCULATIONS (NON-REPAINTING)
+// ============================================================================
+
+// 2.1 Trend Candles (EMA 9 vs EMA 21 Crossover)
+ema9  = ta.ema(close, 9)
+ema21 = ta.ema(close, 21)
+isTrendGreen = ema9 > ema21
+isTrendRed   = ema9 < ema21
+
+// 2.2 Primary Trendlines (Linear Regression Slope)
+lrc = ta.linreg(close, 20, 0)
+lrc_prev = ta.linreg(close, 20, 1)
+isSlopeRising  = lrc > lrc_prev
+isSlopeFalling = lrc < lrc_prev
+
+// 2.3 Support/Resistance Zones (based on 50-bar highest/lowest)
+highest_50 = ta.highest(high, 50)
+lowest_50  = ta.lowest(low, 50)
+atr_val    = ta.atr(atrPeriod)
+supportZoneMin = lowest_50
+supportZoneMax = lowest_50 + atr_val
+resistanceZoneMax = highest_50
+resistanceZoneMin = highest_50 - atr_val
+inSupport    = close >= supportZoneMin
+inResistance = close <= resistanceZoneMax
+
+// 2.4 CPR (Central Pivot Range)
+cpr_p  = (ta.highest(high, 20) + ta.lowest(low, 20) + close) / 3.0
+cpr_bc = (ta.highest(high, 20) + ta.lowest(low, 20)) / 2.0
+cpr_tc = math.abs(cpr_p - cpr_bc) + cpr_p
+
+// 2.5 Fibonacci Retracement
+fib_high = ta.highest(high, 30)
+fib_low  = ta.lowest(low, 30)
+fib_range = fib_high - fib_low
+fib_618_bull = fib_high - 0.618 * fib_range
+fib_786_bull = fib_high - 0.786 * fib_range
+fib_618_bear = fib_low + 0.618 * fib_range
+fib_786_bear = fib_low + 0.786 * fib_range
+inFibZoneBull = close >= fib_786_bull and close <= fib_618_bull
+inFibZoneBear = close >= fib_618_bear and close <= fib_786_bear
+
+// 2.6 RSI Pivot Lines
+rsi_val = ta.rsi(close, 14)
+rsi_oversold = rsi_val < 30.0
+rsi_overbought = rsi_val > 70.0
+
+// 2.7 Moving Average Filter (EMA 50)
+ma_filter_val = ta.ema(close, 50)
+isAboveMA = close > ma_filter_val
+isBelowMA = close < ma_filter_val
+
+// 2.8 Volume Filter (Volume above SMA 20 of Volume)
+vol_sma = ta.sma(volume, 20)
+isVolumeHigh = volume > vol_sma
+
+
+// ============================================================================
+// 3. PIVOT & SWEEP STATE MACHINE LOGIC (NON-REPAINTING)
+// ============================================================================
+
+// 3.1 Non-Repainting Pivot Detection
+pivotHigh = ta.pivothigh(high, pivotLen, pivotLen)
+pivotLow  = ta.pivotlow(low, pivotLen, pivotLen)
+
+var float lastPivotHighVal = na
+var int lastPivotHighBar = na
+var float lastPivotLowVal = na
+var int lastPivotLowBar = na
+
+var float prevPivotHighVal = na
+var float prevPivotLowVal = na
+
+if not na(pivotHigh)
+    prevPivotHighVal := lastPivotHighVal
+    lastPivotHighVal := pivotHigh
+    lastPivotHighBar := bar_index - pivotLen
+
+if not na(pivotLow)
+    prevPivotLowVal := lastPivotLowVal
+    lastPivotLowVal := pivotLow
+    lastPivotLowBar := bar_index - pivotLen
+
+// Market Structure Direction Check Prior to Sweep
+var bool isBullishStructure = true
+var bool isBearishStructure = true
+
+if not na(pivotHigh) or not na(pivotLow)
+    if not na(lastPivotHighVal) and not na(prevPivotHighVal) and not na(lastPivotLowVal) and not na(prevPivotLowVal)
+        isBullishStructure := (lastPivotHighVal > prevPivotHighVal) and (lastPivotLowVal > prevPivotLowVal)
+        isBearishStructure := (lastPivotHighVal < prevPivotHighVal) and (lastPivotLowVal < prevPivotLowVal)
+
+marketStructureDirectionOkBuy = (structureMode == "Auto" and isBearishStructure) or (structureMode == "Bearish") or (structureMode == "Bullish")
+marketStructureDirectionOkSell = (structureMode == "Auto" and isBullishStructure) or (structureMode == "Bullish") or (structureMode == "Bearish")
+
+// 3.2 State Machine Persistent Variables
+// States:
+// 0 = NoSetup,
+// 1 = Sweep Detected,
+// 2 = Reclaim Confirmed,
+// 3 = MSS Confirmed (waiting for BOS if bosRequired),
+// 4 = Setup Fully Completed (Ready for Entry)
+var int buy_state = 0
+var int sell_state = 0
+
+var float activeSweepLevel_buy = na
+var int activeSweepBar_buy = na
+
+var float activeSweepLevel_sell = na
+var int activeSweepBar_sell = na
+
+var int activeReclaimBar_buy = na
+var int activeReclaimBar_sell = na
+
+var int activeMssBar_buy = na
+var int activeMssBar_sell = na
+
+var int activeCompletionBar_buy = na
+var int activeCompletionBar_sell = na
+
+// 3.3 Session Management & Calendar Day Checks
+current_day = dayofmonth(time, timezone == "exchange" ? syminfo.timezone : timezone)
+day_changed = ta.change(current_day) != 0
+
+in_session = not sessionFilter or not na(time(timeframe.period, tradeSession, timezone == "exchange" ? syminfo.timezone : timezone))
+session_changed = ta.change(in_session ? 1 : 0) != 0
+
+// Reset state at start/end of session or day
+if session_changed or not in_session or day_changed
+    buy_state := 0
+    sell_state := 0
+    activeSweepLevel_buy := na
+    activeSweepLevel_sell := na
+
+// 3.4 Sweep Detection
+buy_sweep_detected = false
+sell_sweep_detected = false
+
+if sweepEnabled and not na(lastPivotLowVal) and bar_index > (lastPivotLowBar + pivotLen)
+    low_dist = lastPivotLowVal - low
+    wick_pct = (lastPivotLowVal - low) / (high - low) * 100.0
+    vol_cond = sweepVolMult == 0.0 or volume >= sweepVolMult * vol_sma
+    dist_cond = low_dist >= minSweepDist * syminfo.mintick and low_dist <= maxSweepDist * syminfo.mintick
+    wick_cond = sweepWickPct == 0.0 or (high - low > 0 and wick_pct >= sweepWickPct)
+    if low < lastPivotLowVal and dist_cond and wick_cond and vol_cond and marketStructureDirectionOkBuy
+        buy_sweep_detected := true
+
+if sweepEnabled and not na(lastPivotHighVal) and bar_index > (lastPivotHighBar + pivotLen)
+    high_dist = high - lastPivotHighVal
+    wick_pct = (high - lastPivotHighVal) / (high - low) * 100.0
+    vol_cond = sweepVolMult == 0.0 or volume >= sweepVolMult * vol_sma
+    dist_cond = high_dist >= minSweepDist * syminfo.mintick and high_dist <= maxSweepDist * syminfo.mintick
+    wick_cond = sweepWickPct == 0.0 or (high - low > 0 and wick_pct >= sweepWickPct)
+    if high > lastPivotHighVal and dist_cond and wick_cond and vol_cond and marketStructureDirectionOkSell
+        sell_sweep_detected := true
+
+// 3.5 State Transitions & Invalidation Rules
+// Opposite Sweep Invalidation: Reset state if opposite sweep occurs
+if buy_sweep_detected
+    sell_state := 0
+if sell_sweep_detected
+    buy_state := 0
+
+// Multiple Sweeps: Update Sweep level if deeper sweep occurs in State 1
+if buy_state == 1 and buy_sweep_detected
+    if low < activeSweepLevel_buy
+        activeSweepLevel_buy := low
+        activeSweepBar_buy := bar_index
+
+if sell_state == 1 and sell_sweep_detected
+    if high > activeSweepLevel_sell
+        activeSweepLevel_sell := high
+        activeSweepBar_sell := bar_index
+
+// State 0 -> State 1: Sweep Detected
+if buy_state == 0 and buy_sweep_detected
+    buy_state := 1
+    activeSweepLevel_buy := lastPivotLowVal
+    activeSweepBar_buy := bar_index
+
+if sell_state == 0 and sell_sweep_detected
+    sell_state := 1
+    activeSweepLevel_sell := lastPivotHighVal
+    activeSweepBar_sell := bar_index
+
+// State 1 -> State 2: Reclaim Confirmed
+// Invalidation: if reclaimWindow expires, reset to NoSetup (0)
+if buy_state == 1
+    if (bar_index - activeSweepBar_buy) > reclaimWindow
+        buy_state := 0
+    else if not reclaimRequired
+        buy_state := 2
+        activeReclaimBar_buy := bar_index
+    else
+        // Check reclaim requirements
+        reclaim_valid_bar = allowSameBarReclaim or (bar_index > activeSweepBar_buy)
+        reclaim_val_check = reclaimClose ? close : high
+        reclaim_pct_cond = reclaimMinPct == 0.0 or (reclaim_val_check >= activeSweepLevel_buy * (1.0 + reclaimMinPct / 100.0))
+        reclaim_buffer_cond = reclaim_val_check > (activeSweepLevel_buy + reclaimBuffer * syminfo.mintick)
+        if reclaim_valid_bar and reclaim_buffer_cond and reclaim_pct_cond
+            buy_state := 2
+            activeReclaimBar_buy := bar_index
+
+if sell_state == 1
+    if (bar_index - activeSweepBar_sell) > reclaimWindow
+        sell_state := 0
+    else if not reclaimRequired
+        sell_state := 2
+        activeReclaimBar_sell := bar_index
+    else
+        reclaim_valid_bar = allowSameBarReclaim or (bar_index > activeSweepBar_sell)
+        reclaim_val_check = reclaimClose ? close : low
+        reclaim_pct_cond = reclaimMinPct == 0.0 or (reclaim_val_check <= activeSweepLevel_sell * (1.0 - reclaimMinPct / 100.0))
+        reclaim_buffer_cond = reclaim_val_check < (activeSweepLevel_sell - reclaimBuffer * syminfo.mintick)
+        if reclaim_valid_bar and reclaim_buffer_cond and reclaim_pct_cond
+            sell_state := 2
+            activeReclaimBar_sell := bar_index
+
+// State 2 -> State 3 / 4: MSS (Market Structure Shift)
+// Search backward for the structural pivots (last and second last)
+float lh_level_1 = na
+float lh_level_2 = na
+int found_lh_count = 0
+for i = 1 to mssLookback
+    if not na(pivotHigh[i])
+        found_lh_count := found_lh_count + 1
+        if found_lh_count == 1
+            lh_level_1 := pivotHigh[i]
+        else if found_lh_count == 2
+            lh_level_2 := pivotHigh[i]
+            break
+
+float hl_level_1 = na
+float hl_level_2 = na
+int found_hl_count = 0
+for i = 1 to mssLookback
+    if not na(pivotLow[i])
+        found_hl_count := found_hl_count + 1
+        if found_hl_count == 1
+            hl_level_1 := pivotLow[i]
+        else if found_hl_count == 2
+            hl_level_2 := pivotLow[i]
+            break
+
+// State 2 -> State 3/4
+if buy_state == 2
+    if (bar_index - activeReclaimBar_buy) > mssWindow
+        buy_state := 0
+    else if not mssRequired
+        if bosRequired
+            buy_state := 3
+            activeMssBar_buy := bar_index
+        else
+            buy_state := 4
+            activeCompletionBar_buy := bar_index
+    else if not na(lh_level_1)
+        mss_val_check = mssBreakByClose ? close : high
+        mss_candle_cond = minMSSCandle == 0.0 or ((high - low) >= (minMSSCandle / 100.0) * atr_val)
+        mss_break_cond = false
+        if breakMode == "Close"
+            mss_break_cond := close > (lh_level_1 + mssBuffer * syminfo.mintick)
+        else if breakMode == "Wick"
+            mss_break_cond := high > (lh_level_1 + mssBuffer * syminfo.mintick)
+        else if breakMode == "Buffer_ticks"
+            mss_break_cond := close > (lh_level_1 + breakBuffer * syminfo.mintick)
+        else if breakMode == "Buffer_%"
+            mss_break_cond := close > (lh_level_1 * (1.0 + breakBuffer / 100.0))
+
+        if mss_break_cond and mss_candle_cond
+            if bosRequired
+                buy_state := 3
+                activeMssBar_buy := bar_index
+            else
+                buy_state := 4
+                activeCompletionBar_buy := bar_index
+
+if sell_state == 2
+    if (bar_index - activeReclaimBar_sell) > mssWindow
+        sell_state := 0
+    else if not mssRequired
+        if bosRequired
+            sell_state := 3
+            activeMssBar_sell := bar_index
+        else
+            sell_state := 4
+            activeCompletionBar_sell := bar_index
+    else if not na(hl_level_1)
+        mss_val_check = mssBreakByClose ? close : low
+        mss_candle_cond = minMSSCandle == 0.0 or ((high - low) >= (minMSSCandle / 100.0) * atr_val)
+        mss_break_cond = false
+        if breakMode == "Close"
+            mss_break_cond := close < (hl_level_1 - mssBuffer * syminfo.mintick)
+        else if breakMode == "Wick"
+            mss_break_cond := low < (hl_level_1 - mssBuffer * syminfo.mintick)
+        else if breakMode == "Buffer_ticks"
+            mss_break_cond := close < (hl_level_1 - breakBuffer * syminfo.mintick)
+        else if breakMode == "Buffer_%"
+            mss_break_cond := close < (hl_level_1 * (1.0 - breakBuffer / 100.0))
+
+        if mss_break_cond and mss_candle_cond
+            if bosRequired
+                sell_state := 3
+                activeMssBar_sell := bar_index
+            else
+                sell_state := 4
+                activeCompletionBar_sell := bar_index
+
+// State 3 -> State 4: BOS (Break of Structure)
+if buy_state == 3
+    if (bar_index - activeMssBar_buy) > mssWindow
+        buy_state := 0
+    else if not na(lh_level_2)
+        bos_break_cond = mssBreakByClose ? close > lh_level_2 : high > lh_level_2
+        if bos_break_cond
+            buy_state := 4
+            activeCompletionBar_buy := bar_index
+
+if sell_state == 3
+    if (bar_index - activeMssBar_sell) > mssWindow
+        sell_state := 0
+    else if not na(hl_level_2)
+        bos_break_cond = mssBreakByClose ? close < hl_level_2 : low < hl_level_2
+        if bos_break_cond
+            sell_state := 4
+            activeCompletionBar_sell := bar_index
+
+// Prevent State 4 stale setups: Reset setup if entry window expires (max 1 bar of state 4)
+if buy_state == 4 and (bar_index - activeCompletionBar_buy) > 1
+    buy_state := 0
+
+if sell_state == 4 and (bar_index - activeCompletionBar_sell) > 1
+    sell_state := 0
+
+
+// ============================================================================
+// 4. RISK & PROP FIRM CONTROLS
+// ============================================================================
+
+// 4.1 Daily Loss Lock Setup
+var float start_of_day_equity = na
+if day_changed or na(start_of_day_equity)
+    start_of_day_equity := strategy.equity
+
+daily_loss_pct = ((start_of_day_equity - strategy.equity) / start_of_day_equity) * 100.0
+var bool dailyLossLocked = false
+if day_changed
+    dailyLossLocked := false
+
+if not dailyLossLocked and daily_loss_pct >= maxDailyLoss
+    dailyLossLocked := true
+
+// 4.2 Trade Count Safety
+var int trades_today = 0
+var int last_position_size = 0
+if day_changed
+    trades_today := 0
+
+position_opened = (last_position_size == 0 and strategy.position_size != 0) or
+                  (last_position_size > 0 and strategy.position_size > last_position_size) or
+                  (last_position_size < 0 and strategy.position_size < last_position_size)
+
+if position_opened
+    trades_today := trades_today + 1
+last_position_size := strategy.position_size
+
+trade_count_safety = trades_today < maxDailyTrades
+
+// 4.3 Session Flattening Action
+if flattenAtSessionEnd and sessionFilter and (ta.change(in_session ? 1 : 0) != 0 and not in_session)
+    strategy.close_all("Session End Flatten")
+
+
+// ============================================================================
+// 5. THUNDERBOLT FILTERS SATISFACTION
+// ============================================================================
+
+filters_passed_buy = (not useTrendCandleFilter or isTrendGreen) and
+                     (not useTrendlineFilter or (close > lrc and isSlopeRising)) and
+                     (not useSRFilter or inSupport) and
+                     (not useCPRFilter or close > cpr_p) and
+                     (not useFibFilter or inFibZoneBull) and
+                     (not useRSIFilter or rsi_oversold) and
+                     (not useMAFilter or isAboveMA) and
+                     (not useVolumeFilter or isVolumeHigh)
+
+filters_passed_sell = (not useTrendCandleFilter or isTrendRed) and
+                      (not useTrendlineFilter or (close < lrc and isSlopeFalling)) and
+                      (not useSRFilter or inResistance) and
+                      (not useCPRFilter or close < cpr_p) and
+                      (not useFibFilter or inFibZoneBear) and
+                      (not useRSIFilter or rsi_overbought) and
+                      (not useMAFilter or isBelowMA) and
+                      (not useVolumeFilter or isVolumeHigh)
+
+
+// ============================================================================
+// 6. ENTRY & EXIT EXECUTION
+// ============================================================================
+
+// Cooldown tracker
+var int last_entry_bar = 0
+cooldown_passed = (bar_index - last_entry_bar) >= cooldownBars
+
+// Active SL/TP tracking variables
+var float current_sl = na
+var float current_tp = na
+var float current_tp1 = na
+var float current_tp2 = na
+var float current_tp3 = na
+var bool tp1_hit = false
+
+// Reset tracking variables on position flat
+in_position_prev = strategy.position_size[1] != 0
+in_position_curr = strategy.position_size != 0
+just_flattened = in_position_prev and not in_position_curr
+
+if just_flattened
+    current_sl := na
+    current_tp := na
+    current_tp1 := na
+    current_tp2 := na
+    current_tp3 := na
+    tp1_hit := false
+
+// Potential signals
+buy_setup_complete = buy_state == 4
+sell_setup_complete = sell_state == 4
+
+buy_entry_cond = enterLong and buy_setup_complete and filters_passed_buy and cooldown_passed and not dailyLossLocked and trade_count_safety and in_session
+sell_entry_cond = enterShort and sell_setup_complete and filters_passed_sell and cooldown_passed and not dailyLossLocked and trade_count_safety and in_session
+
+// Limit the pyramiding
+allowed_to_trade = strategy.position_size == 0 or (math.abs(strategy.position_size) > 0 and strategy.opentrades < maxPositions and pyramiding_val > 0)
+
+if buy_entry_cond and allowed_to_trade
+    // Compute SL
+    sl_price = close
+    if stopMethod == "PivotExtreme"
+        sl_price := activeSweepLevel_buy - slBuffer * syminfo.mintick
+    else if stopMethod == "ATR"
+        sl_price := close - atrSLMult * atr_val
+    else if stopMethod == "Fixed%"
+        sl_price := close * (1.0 - slPercent / 100.0)
+    else if stopMethod == "FixedTicks"
+        sl_price := close - slTicks * syminfo.mintick
+
+    // Ensure stop is below entry
+    if sl_price >= close
+        sl_price := close - 5.0 * syminfo.mintick
+
+    // Compute TP
+    tp_price = close
+    if tpMethod == "RiskReward"
+        tp_price := close + rrMultiplier * (close - sl_price)
+    else if tpMethod == "ATR"
+        tp_price := close + atrTPMult * atr_val
+    else if tpMethod == "Fixed%"
+        tp_price := close * (1.0 + tpPercent / 100.0)
+    else if tpMethod == "PivotTarget"
+        tp_price := not na(lastPivotHighVal) ? lastPivotHighVal : (close + 2.0 * (close - sl_price))
+
+    // Compute Partial TPs
+    tp1_p = close + tp1Mult * (close - sl_price)
+    tp2_p = close + tp2Mult * (close - sl_price)
+    tp3_p = close + tp3Mult * (close - sl_price)
+
+    // Capital Risk Sizing
+    risk_distance = close - sl_price
+    qty_to_trade = qty
+    if not useFixedQty and risk_distance > 0
+        risk_amount = strategy.equity * (riskPercent / 100.0)
+        qty_to_trade := risk_amount / risk_distance
+
+    // Place Order
+    if entryType == "Market"
+        strategy.entry("Long", strategy.long, qty=qty_to_trade)
+    else
+        strategy.entry("Long", strategy.long, qty=qty_to_trade, limit=close - entryBuffer * syminfo.mintick)
+
+    // Store state
+    current_sl := sl_price
+    current_tp := tp_price
+    current_tp1 := tp1_p
+    current_tp2 := tp2_p
+    current_tp3 := tp3_p
+    tp1_hit := false
+    last_entry_bar := bar_index
+    buy_state := 0
+
+if sell_entry_cond and allowed_to_trade
+    // Compute SL
+    sl_price = close
+    if stopMethod == "PivotExtreme"
+        sl_price := activeSweepLevel_sell + slBuffer * syminfo.mintick
+    else if stopMethod == "ATR"
+        sl_price := close + atrSLMult * atr_val
+    else if stopMethod == "Fixed%"
+        sl_price := close * (1.0 + slPercent / 100.0)
+    else if stopMethod == "FixedTicks"
+        sl_price := close - slTicks * syminfo.mintick
+
+    if sl_price <= close
+        sl_price := close + 5.0 * syminfo.mintick
+
+    // Compute TP
+    tp_price = close
+    if tpMethod == "RiskReward"
+        tp_price := close - rrMultiplier * (sl_price - close)
+    else if tpMethod == "ATR"
+        tp_price := close - atrTPMult * atr_val
+    else if tpMethod == "Fixed%"
+        tp_price := close * (1.0 - tpPercent / 100.0)
+    else if tpMethod == "PivotTarget"
+        tp_price := not na(lastPivotLowVal) ? lastPivotLowVal : (close - 2.0 * (sl_price - close))
+
+    // Compute Partial TPs
+    tp1_p = close - tp1Mult * (sl_price - close)
+    tp2_p = close - tp2Mult * (sl_price - close)
+    tp3_p = close - tp3Mult * (sl_price - close)
+
+    // Capital Risk Sizing
+    risk_distance = sl_price - close
+    qty_to_trade = qty
+    if not useFixedQty and risk_distance > 0
+        risk_amount = strategy.equity * (riskPercent / 100.0)
+        qty_to_trade := risk_amount / risk_distance
+
+    if entryType == "Market"
+        strategy.entry("Short", strategy.short, qty=qty_to_trade)
+    else
+        strategy.entry("Short", strategy.short, qty=qty_to_trade, limit=close + entryBuffer * syminfo.mintick)
+
+    current_sl := sl_price
+    current_tp := tp_price
+    current_tp1 := tp1_p
+    current_tp2 := tp2_p
+    current_tp3 := tp3_p
+    tp1_hit := false
+    last_entry_bar := bar_index
+    sell_state := 0
+
+// Breakeven adjustments
+if strategy.position_size > 0 and moveSLtoBreakeven and not tp1_hit
+    if high >= current_tp1
+        tp1_hit := true
+        current_sl := strategy.position_avg_price
+
+if strategy.position_size < 0 and moveSLtoBreakeven and not tp1_hit
+    if low <= current_tp1
+        tp1_hit := true
+        current_sl := strategy.position_avg_price
+
+// Manage existing trades
+if strategy.position_size > 0
+    if enablePartialTP
+        strategy.exit("TP1", "Long", qty_percent=33, limit=current_tp1, stop=current_sl)
+        strategy.exit("TP2", "Long", qty_percent=33, limit=current_tp2, stop=current_sl)
+        strategy.exit("TP3", "Long", qty_percent=34, limit=current_tp3, stop=current_sl)
+    else
+        strategy.exit("TP", "Long", limit=current_tp, stop=current_sl)
+
+if strategy.position_size < 0
+    if enablePartialTP
+        strategy.exit("TP1", "Short", qty_percent=33, limit=current_tp1, stop=current_sl)
+        strategy.exit("TP2", "Short", qty_percent=33, limit=current_tp2, stop=current_sl)
+        strategy.exit("TP3", "Short", qty_percent=34, limit=current_tp3, stop=current_sl)
+    else
+        strategy.exit("TP", "Short", limit=current_tp, stop=current_sl)
+
+
+// ============================================================================
+// 7. ALERTS (DYNAMIC STRATEGY ALERTS ONLY)
+// ============================================================================
+
+buy_sweep_alert   = buy_state == 1 and buy_state[1] == 0
+buy_reclaim_alert = buy_state == 2 and buy_state[1] == 1
+buy_mss_alert     = (buy_state == 3 or buy_state == 4) and buy_state[1] == 2
+buy_bos_alert     = buy_state == 4 and buy_state[1] == 3
+buy_entry_alert   = buy_entry_cond
+
+sell_sweep_alert   = sell_state == 1 and sell_state[1] == 0
+sell_reclaim_alert = sell_state == 2 and sell_state[1] == 1
+sell_mss_alert     = (sell_state == 3 or sell_state == 4) and sell_state[1] == 2
+sell_bos_alert     = sell_state == 4 and sell_state[1] == 3
+sell_entry_alert   = sell_entry_cond
+
+daily_loss_lock_alert = dailyLossLocked and not dailyLossLocked[1]
+session_flatten_alert = flattenAtSessionEnd and sessionFilter and (ta.change(in_session ? 1 : 0) != 0 and not in_session)
+
+// Dynamic alert() triggers (for strategy order execution and logging)
+if buy_sweep_alert
+    alert(syminfo.ticker + " BUY-Sweep: price wick below " + str.tostring(activeSweepLevel_buy) + ", potential reversal", alert.freq_once_per_bar)
+
+if buy_reclaim_alert
+    alert(syminfo.ticker + " BUY-Reclaim: price closed above " + str.tostring(activeSweepLevel_buy) + " (sweep low) at " + str.tostring(close), alert.freq_once_per_bar)
+
+if buy_mss_alert
+    alert(syminfo.ticker + " MSS Bullish: closed above LH " + str.tostring(lh_level_1), alert.freq_once_per_bar)
+
+if buy_bos_alert
+    alert(syminfo.ticker + " BOS Bullish: closed above LH2 " + str.tostring(lh_level_2), alert.freq_once_per_bar)
+
+if buy_entry_cond
+    alert(syminfo.ticker + " BUY Signal: complete setup at " + str.tostring(close) + ", Entry=" + str.tostring(close) + ", SL=" + str.tostring(current_sl) + ", TP=" + str.tostring(current_tp), alert.freq_once_per_bar)
+
+if sell_sweep_alert
+    alert(syminfo.ticker + " SELL-Sweep: price wick above " + str.tostring(activeSweepLevel_sell) + ", potential reversal", alert.freq_once_per_bar)
+
+if sell_reclaim_alert
+    alert(syminfo.ticker + " SELL-Reclaim: price closed below " + str.tostring(activeSweepLevel_sell) + " (sweep high) at " + str.tostring(close), alert.freq_once_per_bar)
+
+if sell_mss_alert
+    alert(syminfo.ticker + " MSS Bearish: closed below last Higher Low " + str.tostring(hl_level_1), alert.freq_once_per_bar)
+
+if sell_bos_alert
+    alert(syminfo.ticker + " BOS Bearish: closed below HL2 " + str.tostring(hl_level_2), alert.freq_once_per_bar)
+
+if sell_entry_cond
+    alert(syminfo.ticker + " SELL Signal: complete setup at " + str.tostring(close) + ", Entry=" + str.tostring(close) + ", SL=" + str.tostring(current_sl) + ", TP=" + str.tostring(current_tp), alert.freq_once_per_bar)
+
+if daily_loss_lock_alert
+    alert(syminfo.ticker + " DAILY LOSS LOCK: " + str.tostring(maxDailyLoss) + "% reached. Trading halted until next session.", alert.freq_once_per_bar)
+
+if session_flatten_alert
+    alert(syminfo.ticker + " SESSION END: Flattening all positions.", alert.freq_once_per_bar)
+
+
+// ============================================================================
+// 8. VISUALIZATION PLOTSHAPES AND LINES
+// ============================================================================
+
+// Confirmed Pivot Levels
+plot(showPivots ? lastPivotHighVal : na, "Last Pivot High", color=color.red, style=plot.style_linebr)
+plot(showPivots ? lastPivotLowVal : na, "Last Pivot Low", color=color.green, style=plot.style_linebr)
+
+// Sweep, Reclaim, MSS Shapes
+plotshape(showSweeps and buy_sweep_alert, "Buy Sweep Detected", style=shape.diamond, location=location.belowbar, color=color.aqua, size=size.small, text="💧")
+plotshape(showSweeps and sell_sweep_alert, "Sell Sweep Detected", style=shape.diamond, location=location.abovebar, color=color.orange, size=size.small, text="💧")
+
+plotshape(showReclaims and buy_reclaim_alert, "Buy Reclaim", style=shape.circle, location=location.belowbar, color=color.blue, size=size.small, text="✓")
+plotshape(showReclaims and sell_reclaim_alert, "Sell Reclaim", style=shape.circle, location=location.abovebar, color=color.red, size=size.small, text="✓")
+
+plotshape(showMSS and buy_mss_alert, "Bullish MSS", style=shape.triangleup, location=location.belowbar, color=color.yellow, size=size.small, text="★")
+plotshape(showMSS and sell_mss_alert, "Bearish MSS", style=shape.triangledown, location=location.abovebar, color=color.purple, size=size.small, text="★")
+
+plotshape(showBOS and buy_bos_alert, "Buy BOS", style=shape.square, location=location.belowbar, color=color.lime, size=size.small, text="BOS")
+plotshape(showBOS and sell_bos_alert, "Sell BOS", style=shape.square, location=location.abovebar, color=color.maroon, size=size.small, text="BOS")
+
+// Entry arrows
+plotshape(showEntryArrows and buy_entry_cond, "Buy Entry Arrow", style=shape.arrowup, location=location.belowbar, color=color.green, size=size.normal, text="▲")
+plotshape(showEntryArrows and sell_entry_cond, "Sell Entry Arrow", style=shape.arrowdown, location=location.abovebar, color=color.red, size=size.normal, text="▼")
+
+// SL / TP Lines
+plot(showSL and strategy.position_size != 0 ? current_sl : na, "Active Stop-Loss", color=color.maroon, style=plot.style_line, linewidth=2)
+plot(showTP and strategy.position_size != 0 ? (enablePartialTP ? current_tp1 : current_tp) : na, "Active Take-Profit", color=color.teal, style=plot.style_line, linewidth=2)
